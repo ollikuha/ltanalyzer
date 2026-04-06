@@ -457,7 +457,15 @@ function calcLTP1(steps) {
     const lacDiff   = pt1 && pt2 && pt2.lactate - pt1.lactate >= 0.5;
     const lt1ok     = pt1 && pt1.lactate >= minLT1Lac;
     const lt2ok     = pt2 && pt2.lactate >= minLT2Lac;
+    // Accept LT1 in two scenarios, aligned with calcInflection logic:
+    // 1. Both roots clearly valid (well-separated with meaningful lactate gap)
+    // 2. First root is above minLT1Lac threshold even when the second root
+    //    does not form a clear LT2 — common for hockey-stick curves where
+    //    both inflection points land near the transition zone.
     if (separated && lacDiff && lt1ok && lt2ok) {
+      return { lt1: pt1, lt2: null };
+    }
+    if (lt1ok) {
       return { lt1: pt1, lt2: null };
     }
     return { lt1: null, lt2: null };
