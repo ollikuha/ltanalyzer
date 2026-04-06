@@ -751,11 +751,9 @@ function syncSelectorUI() {
   });
   document.querySelectorAll('.lt1-option').forEach(function (btn) {
     btn.classList.toggle('active', btn.dataset.key === state.lt1Key);
-    btn.disabled = pairActive;
   });
   document.querySelectorAll('.lt2-option').forEach(function (btn) {
     btn.classList.toggle('active', btn.dataset.key === state.lt2Key);
-    btn.disabled = pairActive;
   });
 
   const indivSection = document.getElementById('individual-section');
