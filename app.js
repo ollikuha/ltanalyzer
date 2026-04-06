@@ -347,23 +347,16 @@ function _ltpSecondDerivCoeffs(poly) {
   return { qa: 12*(c[4]||0), qb: 6*(c[3]||0), qc: 2*(c[2]||0) };
 }
 
-// LT2 fallback used by all LTP functions when L''(t)=0 roots are absent or
-// land in the flat plateau:
-//   • For concave-down L'' (qa < 0): its interior maximum marks the point of
-//     greatest lactate acceleration — a solid physiological LT2 proxy.
-//   • For concave-up L'' (qa ≥ 0): the maximum of the parabola is at an
-//     endpoint (last step) which is useless, so fall back to D2max — the
-//     perpendicular-distance method that is robust for S-shaped curves.
+// LTP L''(t)-max fallback: when L''(t)=0 roots are absent or land in the
+// flat plateau, use the interior maximum of L''(t) — the point of greatest
+// lactate acceleration.  No cross-method fallbacks (e.g. Dmax) are used;
+// if L''(t)-max also fails the lactate threshold check, return null.
 function _ltpLT2Fallback(steps, poly, qa, qb, qc, minLT2Lac) {
   const toX = t => poly.xMin + t * poly.xRange;
-  if (qa < 0) {
-    const tMax = findMaxSecondDerivative(qa, qb, qc, 0.05, 0.95);
-    const pt   = interpolateAtIntensity(steps, toX(tMax));
-    if (pt && pt.lactate >= minLT2Lac) return pt;
-  }
-  // D2max on the measured steps (robust for both hockey-stick and S-curves)
-  const r = calcDmax(steps);
-  return (r && r.lt2 && r.lt2.lactate >= minLT2Lac) ? r.lt2 : null;
+  const tMax = findMaxSecondDerivative(qa, qb, qc, 0.05, 0.95);
+  const pt   = interpolateAtIntensity(steps, toX(tMax));
+  if (pt && pt.lactate >= minLT2Lac) return pt;
+  return null;
 }
 
 function calcInflection(steps) {
@@ -394,20 +387,18 @@ function calcInflection(steps) {
       const lacDiff   = pt1 && pt2 && pt2.lactate - pt1.lactate >= 0.5;
       const lt1ok     = pt1 && pt1.lactate >= minLT1Lac;
       const lt2ok     = pt2 && pt2.lactate >= minLT2Lac;
-      // Two well-separated roots with a meaningful lactate span → accept both
-      // as valid LTP1 / LTP2 without further absolute-level checks.
+      // Two well-separated roots with meaningful lactate span → accept both
       if (separated && lacDiff) return { lt1: pt1, lt2: pt2 };
-      // Roots are close together or at the same lactate level (spurious pair).
-      // roots[1] is invalid as LT2; check whether roots[1] passes the absolute
-      // lactate threshold anyway (handles the case where roots[0] is in the
-      // plateau but roots[1] genuinely represents LT2).
-      if (lt2ok) return { lt1: null, lt2: pt2 };
-      // Neither root is a valid LT2.  roots[0] may still be a valid LT1;
-      // use the D2max / L''-max fallback for LT2.
-      return { lt1: lt1ok ? pt1 : null, lt2: fb() };
+      // Roots close together: accept each independently if it passes its threshold
+      return {
+        lt1: lt1ok ? pt1 : null,
+        lt2: lt2ok ? pt2 : fb()
+      };
     } else if (roots.length === 1) {
       const pt = interpolateAtIntensity(steps, toX(roots[0]));
+      // Single root: could be LT1 or LT2 depending on lactate level
       if (pt && pt.lactate >= minLT2Lac) return { lt1: null, lt2: pt };
+      if (pt && pt.lactate >= minLT1Lac) return { lt1: pt, lt2: fb() };
       return { lt1: null, lt2: fb() };
     }
     return { lt1: null, lt2: fb() };
