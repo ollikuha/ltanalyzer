@@ -66,6 +66,7 @@ Three arrays define all available methods. Each entry has `{ key, label, ref, ca
 | key | label | calc function |
 |-----|-------|---------------|
 | `baseline04` | Baseline + 0.4 mmol/L | `calcBaselinePlus04` |
+| `baseline10` | Baseline + 1.0 mmol/L | `calcBaselinePlus10` |
 | `ltp1` | LTP1 — Ensimmäinen taitekohta | `calcLTP1` |
 
 ### `LT2_METHODS` — produce LT2 only (lt1 always null)
@@ -77,6 +78,7 @@ Three arrays define all available methods. Each entry has `{ key, label, ref, ca
 | `moddmax` | Modified Dmax | `calcModDmax` |
 | `loglog` | Log-Log | `calcLogLog` |
 | `d2max` | D2max | `calcD2max` |
+| `obla_custom` | OBLA (mukautettu) | `calcOBLACustom` |
 
 ---
 
@@ -100,7 +102,9 @@ All calc functions receive `sortedSteps` (sorted ascending by intensity) and ret
 | `calcModDmax` | Like Dmax; reference line starts at baseline+0.4 point | 4 |
 | `calcLogLog` | Brute-force split in log-log space; line intersection | 4 |
 | `calcInflection` | Degree-4 poly L″(t)=0 zero-crossings → LT1 + LT2 | 5 |
-| `calcBaselinePlus04` | `min(lactate) + 0.4` interpolation | 2 |
+| `calcBaselinePlus04` | `baseline(avg first 2) + 0.4` interpolation | 2 |
+| `calcBaselinePlus10` | `baseline(avg first 2) + 1.0` interpolation | 2 |
+| `calcOBLACustom` | Configurable OBLA threshold (default 3.5) | 2 |
 | `calcLTP1` | First L″(t)=0 root → LT1 | 5 |
 | `calcLTP2` | Second L″(t)=0 root (fallback: L″ max) → LT2 | 5 |
 | `calcD2max` | L″(t) maximum in [0.05, 0.95] → LT2 | 5 |
@@ -125,6 +129,12 @@ interpolateAtLactate(steps, targetLactate)  // → ThresholdPoint|null
 
 // Linear interpolation — returns ThresholdPoint at given intensity
 interpolateAtIntensity(steps, x)  // → ThresholdPoint|null
+
+// Robust baseline: average of first 2 steps' lactate (guards against outlier)
+baselineLactate(steps)  // → number
+
+// Coefficient of determination for a fitted model
+calcR2(xs, ys, evalFn)  // → number
 ```
 
 ---
@@ -155,6 +165,18 @@ updateMethodInfo()
 
 // Update LT card DOM elements from result object
 updateLtCards(result)
+
+// Run all methods and show comparison table + consensus
+updateMethodComparison(sortedSteps)
+
+// Show training zones based on LT1/LT2
+updateTrainingZones(sortedSteps, result)
+
+// Assess data quality and show warnings
+updateDataQuality(sortedSteps)
+
+// Show R² fit quality for polynomial models
+updateFitQuality(sortedSteps)
 ```
 
 ---
