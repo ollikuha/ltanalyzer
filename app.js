@@ -951,7 +951,7 @@ function computeAndDisplay(sortedSteps) {
     console.error('LT Analyzer: renderChart failed:', e);
   }
   updateMethodInfo();
-  updateTrainingZones(sortedSteps, result);
+  updateTrainingZones(sortedSteps);
   updateMethodComparison(sortedSteps);
   updateDataQuality(sortedSteps);
   updateFitQuality(sortedSteps);
@@ -1253,24 +1253,27 @@ function updateMethodComparison(sortedSteps) {
 
 // ── Training zones ──────────────────────────────────────
 
-function updateTrainingZones(sortedSteps, result) {
+function updateTrainingZones(sortedSteps) {
   var section = document.getElementById('zones-section');
   var wrap = document.getElementById('zones-table-wrap');
-  if (!result || (!result.lt1 && !result.lt2)) {
+
+  // Compute consensus from all methods
+  var allResults = runAllMethods(sortedSteps);
+  var consensus = computeConsensus(allResults);
+
+  if (!consensus.lt1 && !consensus.lt2) {
     section.style.display = 'none';
     return;
   }
 
   var zones = [];
-  var minI = sortedSteps[0].intensity;
-  var maxI = sortedSteps[sortedSteps.length - 1].intensity;
 
-  if (result.lt1 && result.lt2) {
-    // 5-zone model
-    var lt1I = result.lt1.intensity;
-    var lt2I = result.lt2.intensity;
-    var lt1HR = Math.round(result.lt1.hr);
-    var lt2HR = Math.round(result.lt2.hr);
+  if (consensus.lt1 && consensus.lt2) {
+    // 5-zone model from consensus medians
+    var lt1I = consensus.lt1.median;
+    var lt2I = consensus.lt2.median;
+    var lt1HR = Math.round(consensus.lt1.hrMedian);
+    var lt2HR = Math.round(consensus.lt2.hrMedian);
     zones = [
       { name: 'Vy\u00f6hyke 1 \u2014 Palautuminen', color: '#86efac', low: null, high: lt1I * 0.85, hrLow: null, hrHigh: Math.round(lt1HR * 0.85) },
       { name: 'Vy\u00f6hyke 2 \u2014 Peruskest\u00e4vyys', color: '#93c5fd', low: lt1I * 0.85, high: lt1I, hrLow: Math.round(lt1HR * 0.85), hrHigh: lt1HR },
@@ -1278,10 +1281,10 @@ function updateTrainingZones(sortedSteps, result) {
       { name: 'Vy\u00f6hyke 4 \u2014 Kynnys', color: '#fdba74', low: lt2I, high: lt2I * 1.05, hrLow: lt2HR, hrHigh: Math.round(lt2HR * 1.05) },
       { name: 'Vy\u00f6hyke 5 \u2014 VO\u2082max', color: '#fca5a5', low: lt2I * 1.05, high: null, hrLow: Math.round(lt2HR * 1.05), hrHigh: null }
     ];
-  } else if (result.lt2) {
+  } else if (consensus.lt2) {
     // 3-zone model (LT2 only)
-    var lt2I2 = result.lt2.intensity;
-    var lt2HR2 = Math.round(result.lt2.hr);
+    var lt2I2 = consensus.lt2.median;
+    var lt2HR2 = Math.round(consensus.lt2.hrMedian);
     zones = [
       { name: 'Alle LT2', color: '#93c5fd', low: null, high: lt2I2, hrLow: null, hrHigh: lt2HR2 },
       { name: 'LT2-alue', color: '#fdba74', low: lt2I2, high: lt2I2 * 1.05, hrLow: lt2HR2, hrHigh: Math.round(lt2HR2 * 1.05) },
@@ -1289,8 +1292,8 @@ function updateTrainingZones(sortedSteps, result) {
     ];
   } else {
     // 3-zone model (LT1 only)
-    var lt1I2 = result.lt1.intensity;
-    var lt1HR2 = Math.round(result.lt1.hr);
+    var lt1I2 = consensus.lt1.median;
+    var lt1HR2 = Math.round(consensus.lt1.hrMedian);
     zones = [
       { name: 'Alle LT1', color: '#86efac', low: null, high: lt1I2, hrLow: null, hrHigh: lt1HR2 },
       { name: 'LT1-alue', color: '#93c5fd', low: lt1I2, high: lt1I2 * 1.15, hrLow: lt1HR2, hrHigh: Math.round(lt1HR2 * 1.15) },
