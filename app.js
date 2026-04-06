@@ -77,6 +77,13 @@ const LT2_METHODS = [
     ref: 'Beaver et al. (1985)',
     desc: 'Muunnetaan data logaritmiasteikkoon (log laktaatti vs. log intensiteetti). Kaksi lineaarista sovitusta löytävät katkokohdan, joka vastaa LT2:ta.',
     calc: calcLogLog
+  },
+  {
+    key: 'd2max',
+    label: 'D2max',
+    ref: 'Jamnick et al. (2018)',
+    desc: 'Polynomisovituksen (aste 4) toisen derivaatan L\'\'(t) maksimikohta. Löytää intensiteetin, jossa laktaatin nousuvauhdin kiihtyminen on suurimmillaan — eroaa LTP2:sta, joka on nollakohta.',
+    calc: calcD2max
   }
 ];
 
@@ -383,6 +390,25 @@ function calcLTP2(steps) {
     // No roots: use the t where L''(t) is maximized
     const tMax = findMaxSecondDerivative(qa, qb, qc, 0.05, 0.95);
     return { lt1: null, lt2: interpolateAtIntensity(steps, toX(tMax)) };
+  } catch (e) {
+    return { lt1: null, lt2: null };
+  }
+}
+
+function calcD2max(steps) {
+  try {
+    if (steps.length < 5) return { lt1: null, lt2: null };
+    const xs = steps.map(s => s.intensity);
+    const ys = steps.map(s => s.lactate);
+    const poly = fitPoly(xs, ys, 4);
+    const c = poly.coeffs;
+    // L''(t) = 2*c[2] + 6*c[3]*t + 12*c[4]*t^2  — find its maximum in [0.05, 0.95]
+    const qa = 12 * (c[4] || 0);
+    const qb =  6 * (c[3] || 0);
+    const qc =  2 * (c[2] || 0);
+    const tMax = findMaxSecondDerivative(qa, qb, qc, 0.05, 0.95);
+    const x = poly.xMin + tMax * poly.xRange;
+    return { lt1: null, lt2: interpolateAtIntensity(steps, x) };
   } catch (e) {
     return { lt1: null, lt2: null };
   }
