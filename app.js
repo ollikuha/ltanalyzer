@@ -8,19 +8,54 @@
 const state = {
   sport: 'cycling',
   steps: [],
-  results: [],
-  activeIdx: 0,
+  pairKey:  'obla',   // active paired method key, or null
+  lt1Key:   null,     // active individual LT1 method key, or null
+  lt2Key:   null,     // active individual LT2 method key, or null
   chart: null
 };
 
-// ── Method metadata ──────────────────────────────────────
-const METHOD_META = [
+// ── Method registries ────────────────────────────────────
+const PAIR_METHODS = [
   {
     key: 'obla',
-    label: 'OBLA',
+    label: 'OBLA 2.0 / 4.0 mmol/L',
     ref: 'Mader et al. (1976)',
     desc: 'Kiinteät laktaattikynnykset: LT1 = 2.0 mmol/L, LT2 = 4.0 mmol/L. Yksinkertaisin ja eniten käytetty menetelmä. Ei huomioi yksilöllisiä eroja vaan käyttää universaaleja raja-arvoja.',
     calc: calcOBLA
+  },
+  {
+    key: 'ltp',
+    label: 'LTP1 / LTP2',
+    ref: 'Polynomisovitus, 2. derivaatta',
+    desc: 'Polynomisovituksen (aste 4) toisen derivaatan nollakohdat antavat laktaattikäyrän taitekohtia. Ensimmäinen nollakohta = LTP1 (aerobinen), toinen = LTP2 (anaerobinen kynnys).',
+    calc: calcInflection
+  }
+];
+
+const LT1_METHODS = [
+  {
+    key: 'baseline04',
+    label: 'Baseline + 0.4 mmol/L',
+    ref: 'Heck et al. (1985)',
+    desc: 'LT1 = pienin mitattu laktaattiarvo + 0.4 mmol/L. Yksinkertainen yksilöllinen menetelmä, joka perustuu henkilön omaan lepotason laktaattiin.',
+    calc: calcBaselinePlus04
+  },
+  {
+    key: 'ltp1',
+    label: 'LTP1 — Ensimmäinen taitekohta',
+    ref: 'Polynomisovitus, 2. derivaatta',
+    desc: 'Polynomisovituksen (aste 4) toisen derivaatan ensimmäinen nollakohta välillä [0.05, 0.95]. Vastaa laktaattikäyrän ensimmäistä kiihtymiskohtaa (aerobinen kynnys).',
+    calc: calcLTP1
+  }
+];
+
+const LT2_METHODS = [
+  {
+    key: 'ltp2',
+    label: 'LTP2 — Toinen taitekohta',
+    ref: 'Polynomisovitus, 2. derivaatta',
+    desc: 'Polynomisovituksen (aste 4) toisen derivaatan toinen nollakohta. Jos vain yksi nollakohta löytyy, se käytetään LT2:na. Jos nollakohtia ei ole, käytetään L\'\'(t)-maksimia.',
+    calc: calcLTP2
   },
   {
     key: 'dmax',
@@ -31,7 +66,7 @@ const METHOD_META = [
   },
   {
     key: 'moddmax',
-    label: 'Mod. Dmax',
+    label: 'Modified Dmax',
     ref: 'Newell et al. (2007)',
     desc: 'Kuten Dmax, mutta referenssiviiva alkaa ensimmäisestä pisteestä, jossa laktaatti ylittää minimilaktaatin + 0.4 mmol/L. Vähemmän herkkä lepotason laktaattivaihtelulle.',
     calc: calcModDmax
@@ -40,22 +75,8 @@ const METHOD_META = [
     key: 'loglog',
     label: 'Log-Log',
     ref: 'Beaver et al. (1985)',
-    desc: 'Muunnetaan data logaritmiasteikkoon (log laktaatti vs log intensiteetti). Kaksi lineaarista sovitusta löytävät katkokohdan, joka vastaa LT2:ta.',
+    desc: 'Muunnetaan data logaritmiasteikkoon (log laktaatti vs. log intensiteetti). Kaksi lineaarista sovitusta löytävät katkokohdan, joka vastaa LT2:ta.',
     calc: calcLogLog
-  },
-  {
-    key: 'plusone',
-    label: '+1 Baseline',
-    ref: 'Tegtbur et al. (1993)',
-    desc: 'LT1 = minimilaktaatti + 1.0 mmol/L, LT2 = minimilaktaatti + 1.5 mmol/L. Suhteellinen menetelmä, joka huomioi yksilön peruslaktaatin.',
-    calc: calcPlusOne
-  },
-  {
-    key: 'inflection',
-    label: 'Inflektio',
-    ref: '2. derivaatta',
-    desc: 'Polynomisovituksen (aste 4) toisen derivaatan nollakohdat antavat laktaattikäyrän taitekohtia, jotka vastaavat LT1:tä ja LT2:ta.',
-    calc: calcInflection
   }
 ];
 
@@ -250,6 +271,44 @@ function calcPlusOne(steps) {
   return { lt1, lt2 };
 }
 
+// Roots of a*t^2 + b*t + c = 0 in [tMin, tMax], sorted ascending
+function solveQuadraticInRange(a, b, c, tMin, tMax) {
+  const roots = [];
+  if (Math.abs(a) < 1e-12) {
+    if (Math.abs(b) > 1e-12) {
+      const t = -c / b;
+      if (t >= tMin && t <= tMax) roots.push(t);
+    }
+  } else {
+    const disc = b * b - 4 * a * c;
+    if (disc >= 0) {
+      const sq = Math.sqrt(disc);
+      const t1 = (-b + sq) / (2 * a);
+      const t2 = (-b - sq) / (2 * a);
+      if (t1 >= tMin && t1 <= tMax) roots.push(t1);
+      if (t2 >= tMin && t2 <= tMax) roots.push(t2);
+    }
+  }
+  roots.sort((a, b) => a - b);
+  return roots;
+}
+
+// t in [tMin, tMax] where quadratic a*t^2 + b*t + c is maximized
+function findMaxSecondDerivative(a, b, c, tMin, tMax) {
+  const evalFn = t => a * t * t + b * t + c;
+  let bestT = tMin, bestVal = evalFn(tMin);
+  const valEnd = evalFn(tMax);
+  if (valEnd > bestVal) { bestT = tMax; bestVal = valEnd; }
+  if (Math.abs(a) > 1e-12) {
+    const tv = -b / (2 * a);
+    if (tv > tMin && tv < tMax) {
+      const vv = evalFn(tv);
+      if (vv > bestVal) { bestT = tv; }
+    }
+  }
+  return bestT;
+}
+
 function calcInflection(steps) {
   try {
     if (steps.length < 5) return { lt1: null, lt2: null };
@@ -257,40 +316,73 @@ function calcInflection(steps) {
     const ys = steps.map(s => s.lactate);
     const poly = fitPoly(xs, ys, 4);
     const c = poly.coeffs;
-    // L(t) = c[0] + c[1]*t + c[2]*t^2 + c[3]*t^3 + c[4]*t^4
     // L''(t) = 2*c[2] + 6*c[3]*t + 12*c[4]*t^2
     const qa = 12 * (c[4] || 0);
-    const qb = 6 * (c[3] || 0);
-    const qc = 2 * (c[2] || 0);
-    const roots = [];
-    if (Math.abs(qa) < 1e-12) {
-      // Linear case: qb*t + qc = 0
-      if (Math.abs(qb) > 1e-12) {
-        const t = -qc / qb;
-        if (t >= 0.05 && t <= 0.95) roots.push(t);
-      }
-    } else {
-      const disc = qb * qb - 4 * qa * qc;
-      if (disc >= 0) {
-        const sqrtDisc = Math.sqrt(disc);
-        const t1 = (-qb + sqrtDisc) / (2 * qa);
-        const t2 = (-qb - sqrtDisc) / (2 * qa);
-        if (t1 >= 0.05 && t1 <= 0.95) roots.push(t1);
-        if (t2 >= 0.05 && t2 <= 0.95) roots.push(t2);
-      }
-    }
-    roots.sort((a, b) => a - b);
-    const toIntensity = t => poly.xMin + t * poly.xRange;
+    const qb =  6 * (c[3] || 0);
+    const qc =  2 * (c[2] || 0);
+    const roots = solveQuadraticInRange(qa, qb, qc, 0.05, 0.95);
+    const toX = t => poly.xMin + t * poly.xRange;
     if (roots.length >= 2) {
       return {
-        lt1: interpolateAtIntensity(steps, toIntensity(roots[0])),
-        lt2: interpolateAtIntensity(steps, toIntensity(roots[1]))
+        lt1: interpolateAtIntensity(steps, toX(roots[0])),
+        lt2: interpolateAtIntensity(steps, toX(roots[1]))
       };
     } else if (roots.length === 1) {
-      return { lt1: null, lt2: interpolateAtIntensity(steps, toIntensity(roots[0])) };
-    } else {
-      return { lt1: null, lt2: null };
+      return { lt1: null, lt2: interpolateAtIntensity(steps, toX(roots[0])) };
     }
+    return { lt1: null, lt2: null };
+  } catch (e) {
+    return { lt1: null, lt2: null };
+  }
+}
+
+// ── New individual-method algorithms ─────────────────────
+
+function calcBaselinePlus04(steps) {
+  const baseline = Math.min(...steps.map(s => s.lactate));
+  const lt1 = interpolateAtLactate(steps, baseline + 0.4);
+  return { lt1, lt2: null };
+}
+
+function calcLTP1(steps) {
+  try {
+    if (steps.length < 5) return { lt1: null, lt2: null };
+    const xs = steps.map(s => s.intensity);
+    const ys = steps.map(s => s.lactate);
+    const poly = fitPoly(xs, ys, 4);
+    const c = poly.coeffs;
+    const qa = 12 * (c[4] || 0);
+    const qb =  6 * (c[3] || 0);
+    const qc =  2 * (c[2] || 0);
+    const roots = solveQuadraticInRange(qa, qb, qc, 0.05, 0.95);
+    if (roots.length === 0) return { lt1: null, lt2: null };
+    const x = poly.xMin + roots[0] * poly.xRange;
+    return { lt1: interpolateAtIntensity(steps, x), lt2: null };
+  } catch (e) {
+    return { lt1: null, lt2: null };
+  }
+}
+
+function calcLTP2(steps) {
+  try {
+    if (steps.length < 5) return { lt1: null, lt2: null };
+    const xs = steps.map(s => s.intensity);
+    const ys = steps.map(s => s.lactate);
+    const poly = fitPoly(xs, ys, 4);
+    const c = poly.coeffs;
+    const qa = 12 * (c[4] || 0);
+    const qb =  6 * (c[3] || 0);
+    const qc =  2 * (c[2] || 0);
+    const roots = solveQuadraticInRange(qa, qb, qc, 0.05, 0.95);
+    const toX = t => poly.xMin + t * poly.xRange;
+    if (roots.length >= 2) {
+      return { lt1: null, lt2: interpolateAtIntensity(steps, toX(roots[1])) };
+    } else if (roots.length === 1) {
+      return { lt1: null, lt2: interpolateAtIntensity(steps, toX(roots[0])) };
+    }
+    // No roots: use the t where L''(t) is maximized
+    const tMax = findMaxSecondDerivative(qa, qb, qc, 0.05, 0.95);
+    return { lt1: null, lt2: interpolateAtIntensity(steps, toX(tMax)) };
   } catch (e) {
     return { lt1: null, lt2: null };
   }
@@ -528,14 +620,6 @@ function validateAndAnalyze() {
     showToast('Rivit järjestetty nousevaan intensiteettijärjestykseen.', 'warning');
   }
 
-  state.results = METHOD_META.map(function (m) {
-    try {
-      return m.calc(sorted);
-    } catch (e) {
-      return { lt1: null, lt2: null };
-    }
-  });
-
   showScreen('results');
   showResults(sorted);
 }
@@ -543,45 +627,192 @@ function validateAndAnalyze() {
 // ── Results ──────────────────────────────────────────────
 
 function showResults(sortedSteps) {
-  state.activeIdx = 0;
-  buildMethodPills(sortedSteps);
-  setActiveMethod(0, sortedSteps);
+  state.pairKey = 'obla';
+  state.lt1Key  = null;
+  state.lt2Key  = null;
+  buildMethodSelectors(sortedSteps);
+  syncSelectorUI();
+  computeAndDisplay(sortedSteps);
 }
 
-function buildMethodPills(sortedSteps) {
-  const container = document.getElementById('method-pills');
+function buildMethodSelectors(sortedSteps) {
+  const container = document.getElementById('method-selector');
   container.innerHTML = '';
-  METHOD_META.forEach(function (m, idx) {
+
+  // ── Paired section ──
+  const pairSection = document.createElement('div');
+  pairSection.className = 'selector-section';
+  const pairLabel = document.createElement('div');
+  pairLabel.className = 'selector-section-label';
+  pairLabel.textContent = 'Parimenetelmä — LT1 + LT2 yhdessä';
+  pairSection.appendChild(pairLabel);
+  const pairRow = document.createElement('div');
+  pairRow.className = 'pair-options';
+  PAIR_METHODS.forEach(function (m) {
     const btn = document.createElement('button');
-    btn.className = 'pill' + (idx === state.activeIdx ? ' active' : '');
+    btn.className = 'selector-btn pair-option';
+    btn.dataset.key = m.key;
     btn.textContent = m.label;
-    btn.setAttribute('role', 'tab');
-    btn.setAttribute('aria-selected', idx === state.activeIdx ? 'true' : 'false');
-    (function (capturedIdx) {
-      btn.onclick = function () {
-        state.activeIdx = capturedIdx;
-        const sorted = state.steps.slice().sort(function (a, b) { return a.intensity - b.intensity; });
-        buildMethodPills(sorted);
-        setActiveMethod(capturedIdx, sorted);
-      };
-    })(idx);
-    container.appendChild(btn);
+    btn.onclick = function () { setPairMethod(m.key, sortedSteps); };
+    pairRow.appendChild(btn);
   });
+  pairSection.appendChild(pairRow);
+  container.appendChild(pairSection);
+
+  // ── Individual section ──
+  const indivSection = document.createElement('div');
+  indivSection.className = 'selector-section';
+  indivSection.id = 'individual-section';
+  const indivLabel = document.createElement('div');
+  indivLabel.className = 'selector-section-label';
+  indivLabel.textContent = 'Yksittäiset menetelmät';
+  indivSection.appendChild(indivLabel);
+
+  const grid = document.createElement('div');
+  grid.className = 'individual-grid';
+
+  // LT1 column
+  const lt1Col = document.createElement('div');
+  lt1Col.className = 'individual-col';
+  const lt1ColLabel = document.createElement('div');
+  lt1ColLabel.className = 'individual-col-label lt1-col-label';
+  lt1ColLabel.textContent = 'LT1 — Aerobinen kynnys';
+  lt1Col.appendChild(lt1ColLabel);
+  LT1_METHODS.forEach(function (m) {
+    const btn = document.createElement('button');
+    btn.className = 'selector-btn lt1-option';
+    btn.dataset.key = m.key;
+    btn.textContent = m.label;
+    btn.onclick = function () { setLT1Method(m.key, sortedSteps); };
+    lt1Col.appendChild(btn);
+  });
+  grid.appendChild(lt1Col);
+
+  // LT2 column
+  const lt2Col = document.createElement('div');
+  lt2Col.className = 'individual-col';
+  const lt2ColLabel = document.createElement('div');
+  lt2ColLabel.className = 'individual-col-label lt2-col-label';
+  lt2ColLabel.textContent = 'LT2 — Anaerobinen kynnys';
+  lt2Col.appendChild(lt2ColLabel);
+  LT2_METHODS.forEach(function (m) {
+    const btn = document.createElement('button');
+    btn.className = 'selector-btn lt2-option';
+    btn.dataset.key = m.key;
+    btn.textContent = m.label;
+    btn.onclick = function () { setLT2Method(m.key, sortedSteps); };
+    lt2Col.appendChild(btn);
+  });
+  grid.appendChild(lt2Col);
+
+  indivSection.appendChild(grid);
+  container.appendChild(indivSection);
 }
 
-function setActiveMethod(idx, sortedSteps) {
+function syncSelectorUI() {
+  const pairActive = state.pairKey !== null;
+
+  document.querySelectorAll('.pair-option').forEach(function (btn) {
+    btn.classList.toggle('active', btn.dataset.key === state.pairKey);
+  });
+  document.querySelectorAll('.lt1-option').forEach(function (btn) {
+    btn.classList.toggle('active', btn.dataset.key === state.lt1Key);
+    btn.disabled = pairActive;
+  });
+  document.querySelectorAll('.lt2-option').forEach(function (btn) {
+    btn.classList.toggle('active', btn.dataset.key === state.lt2Key);
+    btn.disabled = pairActive;
+  });
+
+  const indivSection = document.getElementById('individual-section');
+  if (indivSection) {
+    indivSection.classList.toggle('individual-section--disabled', pairActive);
+  }
+}
+
+function setPairMethod(key, sortedSteps) {
+  state.pairKey = key;
+  state.lt1Key  = null;
+  state.lt2Key  = null;
+  syncSelectorUI();
+  computeAndDisplay(sortedSteps);
+}
+
+function setLT1Method(key, sortedSteps) {
+  state.lt1Key  = key;
+  state.pairKey = null;
+  syncSelectorUI();
+  computeAndDisplay(sortedSteps);
+}
+
+function setLT2Method(key, sortedSteps) {
+  state.lt2Key  = key;
+  state.pairKey = null;
+  syncSelectorUI();
+  computeAndDisplay(sortedSteps);
+}
+
+function computeAndDisplay(sortedSteps) {
   if (!sortedSteps) {
     sortedSteps = state.steps.slice().sort(function (a, b) { return a.intensity - b.intensity; });
   }
-  const result = state.results[idx];
-  const meta = METHOD_META[idx];
-
+  let result = { lt1: null, lt2: null };
+  try {
+    if (state.pairKey !== null) {
+      const meta = PAIR_METHODS.find(function (m) { return m.key === state.pairKey; });
+      if (meta) result = meta.calc(sortedSteps);
+    } else {
+      if (state.lt1Key !== null) {
+        const m = LT1_METHODS.find(function (m) { return m.key === state.lt1Key; });
+        if (m) result.lt1 = m.calc(sortedSteps).lt1;
+      }
+      if (state.lt2Key !== null) {
+        const m = LT2_METHODS.find(function (m) { return m.key === state.lt2Key; });
+        if (m) result.lt2 = m.calc(sortedSteps).lt2;
+      }
+    }
+  } catch (e) { /* leave nulls */ }
   updateLtCards(result);
   renderChart(sortedSteps, result);
+  updateMethodInfo();
+}
 
-  document.getElementById('info-name').textContent = meta.label;
-  document.getElementById('info-desc').textContent = meta.desc;
-  document.getElementById('info-ref').textContent = 'Viite: ' + meta.ref;
+function updateMethodInfo() {
+  const nameEl = document.getElementById('info-name');
+  const descEl = document.getElementById('info-desc');
+  const refEl  = document.getElementById('info-ref');
+
+  if (state.pairKey !== null) {
+    const meta = PAIR_METHODS.find(function (m) { return m.key === state.pairKey; });
+    if (meta) {
+      nameEl.textContent = meta.label;
+      descEl.textContent = meta.desc;
+      refEl.textContent  = 'Viite: ' + meta.ref;
+    }
+  } else {
+    const lt1meta = state.lt1Key ? LT1_METHODS.find(function (m) { return m.key === state.lt1Key; }) : null;
+    const lt2meta = state.lt2Key ? LT2_METHODS.find(function (m) { return m.key === state.lt2Key; }) : null;
+    const parts = [];
+    if (lt1meta) parts.push(lt1meta.label);
+    if (lt2meta) parts.push(lt2meta.label);
+    nameEl.textContent = parts.length ? parts.join(' + ') : 'Valitse menetelmä';
+    descEl.innerHTML = '';
+    if (lt1meta) {
+      const p = document.createElement('p');
+      p.textContent = 'LT1 – ' + lt1meta.desc;
+      descEl.appendChild(p);
+    }
+    if (lt2meta) {
+      const p = document.createElement('p');
+      p.textContent = 'LT2 – ' + lt2meta.desc;
+      descEl.appendChild(p);
+    }
+    if (!lt1meta && !lt2meta) {
+      descEl.textContent = 'Valitse LT1- ja/tai LT2-menetelmä yläpuolelta.';
+    }
+    const refs = [lt1meta && lt1meta.ref, lt2meta && lt2meta.ref].filter(Boolean);
+    refEl.textContent = refs.length ? 'Viite: ' + refs.join(' | ') : '';
+  }
 }
 
 function updateLtCards(result) {
