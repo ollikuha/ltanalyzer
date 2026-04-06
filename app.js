@@ -41,6 +41,13 @@ const LT1_METHODS = [
     calc: calcBaselinePlus04
   },
   {
+    key: 'baseline10',
+    label: 'Baseline + 1.0 mmol/L',
+    ref: 'Dickhuth et al. (1999)',
+    desc: 'LT1 = baseline-laktaatti + 1.0 mmol/L. Käytetään laajasti Keski-Euroopassa. Korkeampi kynnys kuin +0.4, vastaa paremmin ensimmäistä havaittavaa laktaattinousua kestävyysurheilijoilla.',
+    calc: calcBaselinePlus10
+  },
+  {
     key: 'ltp1',
     label: 'LTP1 — Ensimmäinen taitekohta',
     ref: 'Polynomisovitus, 2. derivaatta',
@@ -84,10 +91,26 @@ const LT2_METHODS = [
     ref: 'Jamnick et al. (2018)',
     desc: 'Polynomisovituksen (aste 4) toisen derivaatan L\'\'(t) maksimikohta. Löytää intensiteetin, jossa laktaatin nousuvauhdin kiihtyminen on suurimmillaan — eroaa LTP2:sta, joka on nollakohta.',
     calc: calcD2max
+  },
+  {
+    key: 'obla_custom',
+    label: 'OBLA (mukautettu)',
+    ref: 'Heck et al. (1985)',
+    desc: 'Kiinteä laktaattikynnys mukautettavalla raja-arvolla (oletus 3.5 mmol/L). Voit säätää arvoa 2.0–6.0 mmol/L. Arvo 3.5 on usein lähempänä todellista MLSS:ää kuin perinteinen 4.0 mmol/L.',
+    calc: calcOBLACustom,
+    customThreshold: 3.5
   }
 ];
 
 // ── Shared Math Utilities ────────────────────────────────
+
+// Robust baseline lactate: average of the two lowest-intensity steps.
+// Using the average (instead of a single Math.min) guards against one
+// anomalously low reading skewing baseline-relative methods.
+function baselineLactate(steps) {
+  if (steps.length <= 2) return Math.min(...steps.map(s => s.lactate));
+  return (steps[0].lactate + steps[1].lactate) / 2;
+}
 
 function interpolateAtLactate(steps, target) {
   for (let i = 0; i < steps.length - 1; i++) {
@@ -205,8 +228,9 @@ function calcDmax(steps) {
   const xs = steps.map(s => s.intensity);
   const ys = steps.map(s => s.lactate);
   const poly = fitPoly(xs, ys, 3);
-  const x1 = xs[0], y1 = ys[0];
-  const x2 = xs[xs.length - 1], y2 = ys[ys.length - 1];
+  // Use polynomial values at endpoints for a consistent reference line
+  const x1 = xs[0], y1 = poly.eval(x1);
+  const x2 = xs[xs.length - 1], y2 = poly.eval(x2);
   const N = 500;
   let maxDist = -Infinity, dmaxX = x1;
   for (let i = 0; i <= N; i++) {
@@ -225,12 +249,13 @@ function calcModDmax(steps) {
   const xs = steps.map(s => s.intensity);
   const ys = steps.map(s => s.lactate);
   const poly = fitPoly(xs, ys, 3);
-  const minLac = Math.min(...ys);
-  const threshold = minLac + 0.4;
+  const baseline = baselineLactate(steps);
+  const threshold = baseline + 0.4;
   const startIdx = steps.findIndex(s => s.lactate >= threshold);
   if (startIdx < 0) return { lt1: null, lt2: null };
-  const x1 = xs[startIdx], y1 = ys[startIdx];
-  const x2 = xs[xs.length - 1], y2 = ys[ys.length - 1];
+  // Use polynomial values for consistent reference line
+  const x1 = xs[startIdx], y1 = poly.eval(x1);
+  const x2 = xs[xs.length - 1], y2 = poly.eval(x2);
   const N = 500;
   let maxDist = -Infinity, dmaxX = x1;
   for (let i = 0; i <= N; i++) {
@@ -272,7 +297,7 @@ function calcLogLog(steps) {
 }
 
 function calcPlusOne(steps) {
-  const baseline = Math.min(...steps.map(s => s.lactate));
+  const baseline = baselineLactate(steps);
   const lt1 = interpolateAtLactate(steps, baseline + 1.0);
   const lt2 = interpolateAtLactate(steps, baseline + 1.5);
   return { lt1, lt2 };
@@ -394,9 +419,22 @@ function calcInflection(steps) {
 // ── New individual-method algorithms ─────────────────────
 
 function calcBaselinePlus04(steps) {
-  const baseline = Math.min(...steps.map(s => s.lactate));
+  const baseline = baselineLactate(steps);
   const lt1 = interpolateAtLactate(steps, baseline + 0.4);
   return { lt1, lt2: null };
+}
+
+function calcBaselinePlus10(steps) {
+  const baseline = baselineLactate(steps);
+  const lt1 = interpolateAtLactate(steps, baseline + 1.0);
+  return { lt1, lt2: null };
+}
+
+function calcOBLACustom(steps) {
+  var meta = LT2_METHODS.find(function (m) { return m.key === 'obla_custom'; });
+  var threshold = (meta && meta.customThreshold) || 3.5;
+  var lt2 = interpolateAtLactate(steps, threshold);
+  return { lt1: null, lt2: lt2 };
 }
 
 function calcLTP1(steps) {
@@ -802,6 +840,37 @@ function buildMethodSelectors(sortedSteps) {
     btn.textContent = m.label;
     btn.onclick = function () { setLT2Method(m.key, sortedSteps); };
     lt2Col.appendChild(btn);
+    // Add slider for configurable OBLA
+    if (m.key === 'obla_custom') {
+      const sliderWrap = document.createElement('div');
+      sliderWrap.className = 'obla-slider-wrap';
+      sliderWrap.id = 'obla-slider-wrap';
+      sliderWrap.style.display = 'none';
+      sliderWrap.style.padding = '6px 0 4px';
+      sliderWrap.style.fontSize = '0.82rem';
+      const slider = document.createElement('input');
+      slider.type = 'range';
+      slider.min = '2.0';
+      slider.max = '6.0';
+      slider.step = '0.5';
+      slider.value = String(m.customThreshold || 3.5);
+      slider.style.width = '100%';
+      slider.id = 'obla-custom-slider';
+      var valLabel = document.createElement('span');
+      valLabel.id = 'obla-custom-val';
+      valLabel.textContent = (m.customThreshold || 3.5).toFixed(1) + ' mmol/L';
+      valLabel.style.fontWeight = '600';
+      slider.oninput = function () {
+        var v = parseFloat(slider.value);
+        m.customThreshold = v;
+        valLabel.textContent = v.toFixed(1) + ' mmol/L';
+        btn.textContent = 'OBLA ' + v.toFixed(1) + ' mmol/L';
+        if (state.lt2Key === 'obla_custom') computeAndDisplay(sortedSteps);
+      };
+      sliderWrap.appendChild(slider);
+      sliderWrap.appendChild(valLabel);
+      lt2Col.appendChild(sliderWrap);
+    }
   });
   grid.appendChild(lt2Col);
 
@@ -825,6 +894,11 @@ function syncSelectorUI() {
   const indivSection = document.getElementById('individual-section');
   if (indivSection) {
     indivSection.classList.toggle('individual-section--disabled', pairActive);
+  }
+  // Show/hide OBLA custom slider
+  var sliderWrap = document.getElementById('obla-slider-wrap');
+  if (sliderWrap) {
+    sliderWrap.style.display = (state.lt2Key === 'obla_custom') ? '' : 'none';
   }
 }
 
@@ -877,6 +951,10 @@ function computeAndDisplay(sortedSteps) {
     console.error('LT Analyzer: renderChart failed:', e);
   }
   updateMethodInfo();
+  updateTrainingZones(sortedSteps, result);
+  updateMethodComparison(sortedSteps);
+  updateDataQuality(sortedSteps);
+  updateFitQuality(sortedSteps);
 }
 
 function updateMethodInfo() {
@@ -939,6 +1017,307 @@ function updateCard(which, point, naMsg) {
     hrEl.textContent = '';
     lacEl.textContent = naMsg;
   }
+}
+
+// ── R² (coefficient of determination) ───────────────────
+
+function calcR2(xs, ys, evalFn) {
+  var mean = ys.reduce(function (a, b) { return a + b; }, 0) / ys.length;
+  var ssTot = ys.reduce(function (s, y) { return s + (y - mean) * (y - mean); }, 0);
+  if (ssTot < 1e-14) return 1;
+  var ssRes = xs.reduce(function (s, x, i) {
+    var r = ys[i] - evalFn(x);
+    return s + r * r;
+  }, 0);
+  return 1 - ssRes / ssTot;
+}
+
+function updateFitQuality(sortedSteps) {
+  var section = document.getElementById('fit-quality-section');
+  var wrap = document.getElementById('fit-quality-report');
+  if (!sortedSteps || sortedSteps.length < 3) {
+    section.style.display = 'none';
+    return;
+  }
+  var xs = sortedSteps.map(function (s) { return s.intensity; });
+  var ys = sortedSteps.map(function (s) { return s.lactate; });
+
+  var poly3 = fitPoly(xs, ys, 3);
+  var r2_3 = calcR2(xs, ys, poly3.eval);
+  var items = [];
+  items.push({ label: 'Kuutio (aste 3)', r2: r2_3 });
+
+  if (sortedSteps.length >= 5) {
+    var poly4 = fitPoly(xs, ys, 4);
+    var r2_4 = calcR2(xs, ys, poly4.eval);
+    items.push({ label: 'Kvartti (aste 4)', r2: r2_4 });
+  }
+
+  wrap.innerHTML = '';
+  items.forEach(function (item) {
+    var r2Pct = Math.max(0, Math.min(100, item.r2 * 100));
+    var color = r2Pct >= 95 ? '#16a34a' : r2Pct >= 85 ? '#d97706' : '#dc2626';
+    var div = document.createElement('div');
+    div.style.marginBottom = '8px';
+    div.innerHTML =
+      '<div style="margin-bottom:2px">' + item.label + '</div>' +
+      '<div class="r2-bar-wrap">' +
+        '<div class="r2-bar"><div class="r2-bar-fill" style="width:' + r2Pct.toFixed(1) + '%;background:' + color + '"></div></div>' +
+        '<span class="r2-value" style="color:' + color + '">R\u00b2 = ' + item.r2.toFixed(4) + '</span>' +
+      '</div>';
+    wrap.appendChild(div);
+  });
+
+  if (r2_3 < 0.85) {
+    var warn = document.createElement('div');
+    warn.className = 'quality-item';
+    warn.innerHTML = '<span class="quality-icon quality-warn">\u26a0</span>' +
+      '<span>Matala R\u00b2 viittaa siihen, ett\u00e4 polynomisovitus ei kuvaa dataa hyvin. Tuloksia kannattaa tulkita varovaisesti.</span>';
+    wrap.appendChild(warn);
+  }
+  section.style.display = '';
+}
+
+// ── Data quality assessment ─────────────────────────────
+
+function updateDataQuality(sortedSteps) {
+  var section = document.getElementById('quality-section');
+  var wrap = document.getElementById('quality-report');
+  if (!sortedSteps || sortedSteps.length < 2) {
+    section.style.display = 'none';
+    return;
+  }
+  wrap.innerHTML = '';
+  var items = [];
+  var n = sortedSteps.length;
+
+  // Step count
+  if (n >= 8) {
+    items.push({ icon: 'ok', text: 'Portaita: ' + n + ' \u2014 hyv\u00e4 m\u00e4\u00e4r\u00e4 luotettavaan analyysiin.' });
+  } else if (n >= 5) {
+    items.push({ icon: 'warn', text: 'Portaita: ' + n + ' \u2014 riitt\u00e4v\u00e4, mutta 8+ portaasta luotettavuus paranee.' });
+  } else {
+    items.push({ icon: 'err', text: 'Portaita: ' + n + ' \u2014 v\u00e4h\u00e4inen m\u00e4\u00e4r\u00e4. Polynomimenetelm\u00e4t (LTP, D2max) vaativat v\u00e4hint\u00e4\u00e4n 5 porrasta.' });
+  }
+
+  // Lactate range
+  var lacMin = sortedSteps[0].lactate;
+  var lacMax = sortedSteps[n - 1].lactate;
+  var lacRange = lacMax - lacMin;
+  if (lacRange >= 4.0) {
+    items.push({ icon: 'ok', text: 'Laktaattialue: ' + lacMin.toFixed(1) + ' \u2013 ' + lacMax.toFixed(1) + ' mmol/L \u2014 riitt\u00e4v\u00e4 hajonta.' });
+  } else if (lacRange >= 2.0) {
+    items.push({ icon: 'warn', text: 'Laktaattialue: ' + lacMin.toFixed(1) + ' \u2013 ' + lacMax.toFixed(1) + ' mmol/L \u2014 kohtalainen hajonta. Korkeampi huippuarvo parantaisi tarkkuutta.' });
+  } else {
+    items.push({ icon: 'err', text: 'Laktaattialue: ' + lacMin.toFixed(1) + ' \u2013 ' + lacMax.toFixed(1) + ' mmol/L \u2014 kapea hajonta. Testi ei ehk\u00e4 jatkunut riitt\u00e4v\u00e4n pitk\u00e4\u00e4n kynnyksen yli.' });
+  }
+
+  // Monotonicity check
+  var nonMono = 0;
+  for (var i = 1; i < n; i++) {
+    if (sortedSteps[i].lactate < sortedSteps[i - 1].lactate - 0.1) nonMono++;
+  }
+  if (nonMono === 0) {
+    items.push({ icon: 'ok', text: 'Laktaattikurva nousee monotonisesti \u2014 normaali.' });
+  } else {
+    items.push({ icon: 'warn', text: nonMono + ' porras, jossa laktaatti laskee edellisest\u00e4. Tarkista mittausdatan oikeellisuus.' });
+  }
+
+  // Above 4.0 check (needed for OBLA)
+  if (lacMax < 4.0) {
+    items.push({ icon: 'warn', text: 'Laktaatti ei yll\u00e4 4.0 mmol/L:iin \u2014 OBLA 4.0 -menetelm\u00e4 ei voi laskea LT2:ta.' });
+  }
+
+  items.forEach(function (item) {
+    var div = document.createElement('div');
+    div.className = 'quality-item';
+    div.innerHTML = '<span class="quality-icon quality-' + item.icon + '">' +
+      (item.icon === 'ok' ? '\u2713' : item.icon === 'warn' ? '\u26a0' : '\u2717') +
+      '</span><span>' + item.text + '</span>';
+    wrap.appendChild(div);
+  });
+  section.style.display = '';
+}
+
+// ── Method comparison ───────────────────────────────────
+
+function runAllMethods(sortedSteps) {
+  var results = [];
+  var allMethods = [].concat(
+    PAIR_METHODS.map(function (m) { return { key: m.key, label: m.label, type: 'pair', calc: m.calc }; }),
+    LT1_METHODS.map(function (m) { return { key: m.key, label: m.label, type: 'lt1', calc: m.calc }; }),
+    LT2_METHODS.map(function (m) { return { key: m.key, label: m.label, type: 'lt2', calc: m.calc }; })
+  );
+  allMethods.forEach(function (m) {
+    try {
+      var r = m.calc(sortedSteps);
+      results.push({
+        key: m.key,
+        label: m.label,
+        type: m.type,
+        lt1: r ? r.lt1 : null,
+        lt2: r ? r.lt2 : null
+      });
+    } catch (e) {
+      results.push({ key: m.key, label: m.label, type: m.type, lt1: null, lt2: null });
+    }
+  });
+  return results;
+}
+
+function computeConsensus(allResults) {
+  var lt1Vals = [], lt2Vals = [];
+  var lt1HRs = [], lt2HRs = [];
+  allResults.forEach(function (r) {
+    if (r.lt1) { lt1Vals.push(r.lt1.intensity); lt1HRs.push(r.lt1.hr); }
+    if (r.lt2) { lt2Vals.push(r.lt2.intensity); lt2HRs.push(r.lt2.hr); }
+  });
+  function median(arr) {
+    if (!arr.length) return null;
+    var s = arr.slice().sort(function (a, b) { return a - b; });
+    var mid = Math.floor(s.length / 2);
+    return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+  }
+  return {
+    lt1: lt1Vals.length ? {
+      median: median(lt1Vals),
+      min: Math.min.apply(null, lt1Vals),
+      max: Math.max.apply(null, lt1Vals),
+      hrMedian: median(lt1HRs),
+      count: lt1Vals.length
+    } : null,
+    lt2: lt2Vals.length ? {
+      median: median(lt2Vals),
+      min: Math.min.apply(null, lt2Vals),
+      max: Math.max.apply(null, lt2Vals),
+      hrMedian: median(lt2HRs),
+      count: lt2Vals.length
+    } : null
+  };
+}
+
+function updateMethodComparison(sortedSteps) {
+  var section = document.getElementById('comparison-section');
+  var tableWrap = document.getElementById('comparison-table-wrap');
+  var summaryEl = document.getElementById('consensus-summary');
+  if (!sortedSteps || sortedSteps.length < 3) {
+    section.style.display = 'none';
+    return;
+  }
+
+  var allResults = runAllMethods(sortedSteps);
+  var consensus = computeConsensus(allResults);
+
+  // Determine active method key(s)
+  var activeKeys = [];
+  if (state.pairKey) activeKeys.push(state.pairKey);
+  if (state.lt1Key) activeKeys.push(state.lt1Key);
+  if (state.lt2Key) activeKeys.push(state.lt2Key);
+
+  // Build table
+  var html = '<table class="comparison-table">' +
+    '<thead><tr><th>Menetelm\u00e4</th><th>LT1</th><th>LT2</th></tr></thead><tbody>';
+  allResults.forEach(function (r) {
+    var isActive = activeKeys.indexOf(r.key) >= 0;
+    var rowClass = isActive ? ' class="comp-active"' : '';
+    var lt1Str = r.lt1 ? '<span class="comp-lt1">' + formatIntensity(r.lt1.intensity) + '</span>' : '<span style="color:var(--subtle)">—</span>';
+    var lt2Str = r.lt2 ? '<span class="comp-lt2">' + formatIntensity(r.lt2.intensity) + '</span>' : '<span style="color:var(--subtle)">—</span>';
+    html += '<tr' + rowClass + '><td>' + r.label + '</td><td>' + lt1Str + '</td><td>' + lt2Str + '</td></tr>';
+  });
+  html += '</tbody></table>';
+  tableWrap.innerHTML = html;
+
+  // Consensus summary
+  var parts = [];
+  parts.push('<div class="consensus-label">Konsensus (mediaani kaikista menetelmist\u00e4)</div>');
+  parts.push('<div class="consensus-row">');
+  if (consensus.lt1) {
+    parts.push('<span class="consensus-val lt1">LT1: ' + formatIntensity(consensus.lt1.median) +
+      ' (\u2665 ' + Math.round(consensus.lt1.hrMedian) + ' bpm)</span>');
+    parts.push('<span class="consensus-range">hajonta: ' + formatIntensity(consensus.lt1.min) +
+      ' \u2013 ' + formatIntensity(consensus.lt1.max) + ' (' + consensus.lt1.count + ' menetelm\u00e4\u00e4)</span>');
+  }
+  if (consensus.lt2) {
+    parts.push('<span class="consensus-val lt2">LT2: ' + formatIntensity(consensus.lt2.median) +
+      ' (\u2665 ' + Math.round(consensus.lt2.hrMedian) + ' bpm)</span>');
+    parts.push('<span class="consensus-range">hajonta: ' + formatIntensity(consensus.lt2.min) +
+      ' \u2013 ' + formatIntensity(consensus.lt2.max) + ' (' + consensus.lt2.count + ' menetelm\u00e4\u00e4)</span>');
+  }
+  if (!consensus.lt1 && !consensus.lt2) {
+    parts.push('<span style="color:var(--muted)">Ei riitt\u00e4v\u00e4sti tuloksia konsensusarvioon.</span>');
+  }
+  parts.push('</div>');
+  summaryEl.innerHTML = parts.join('');
+  section.style.display = '';
+}
+
+// ── Training zones ──────────────────────────────────────
+
+function updateTrainingZones(sortedSteps, result) {
+  var section = document.getElementById('zones-section');
+  var wrap = document.getElementById('zones-table-wrap');
+  if (!result || (!result.lt1 && !result.lt2)) {
+    section.style.display = 'none';
+    return;
+  }
+
+  var zones = [];
+  var minI = sortedSteps[0].intensity;
+  var maxI = sortedSteps[sortedSteps.length - 1].intensity;
+
+  if (result.lt1 && result.lt2) {
+    // 5-zone model
+    var lt1I = result.lt1.intensity;
+    var lt2I = result.lt2.intensity;
+    var lt1HR = Math.round(result.lt1.hr);
+    var lt2HR = Math.round(result.lt2.hr);
+    zones = [
+      { name: 'Vy\u00f6hyke 1 \u2014 Palautuminen', color: '#86efac', low: null, high: lt1I * 0.85, hrLow: null, hrHigh: Math.round(lt1HR * 0.85) },
+      { name: 'Vy\u00f6hyke 2 \u2014 Peruskest\u00e4vyys', color: '#93c5fd', low: lt1I * 0.85, high: lt1I, hrLow: Math.round(lt1HR * 0.85), hrHigh: lt1HR },
+      { name: 'Vy\u00f6hyke 3 \u2014 Tempo', color: '#fde047', low: lt1I, high: lt2I, hrLow: lt1HR, hrHigh: lt2HR },
+      { name: 'Vy\u00f6hyke 4 \u2014 Kynnys', color: '#fdba74', low: lt2I, high: lt2I * 1.05, hrLow: lt2HR, hrHigh: Math.round(lt2HR * 1.05) },
+      { name: 'Vy\u00f6hyke 5 \u2014 VO\u2082max', color: '#fca5a5', low: lt2I * 1.05, high: null, hrLow: Math.round(lt2HR * 1.05), hrHigh: null }
+    ];
+  } else if (result.lt2) {
+    // 3-zone model (LT2 only)
+    var lt2I2 = result.lt2.intensity;
+    var lt2HR2 = Math.round(result.lt2.hr);
+    zones = [
+      { name: 'Alle LT2', color: '#93c5fd', low: null, high: lt2I2, hrLow: null, hrHigh: lt2HR2 },
+      { name: 'LT2-alue', color: '#fdba74', low: lt2I2, high: lt2I2 * 1.05, hrLow: lt2HR2, hrHigh: Math.round(lt2HR2 * 1.05) },
+      { name: 'Yli LT2', color: '#fca5a5', low: lt2I2 * 1.05, high: null, hrLow: Math.round(lt2HR2 * 1.05), hrHigh: null }
+    ];
+  } else {
+    // 3-zone model (LT1 only)
+    var lt1I2 = result.lt1.intensity;
+    var lt1HR2 = Math.round(result.lt1.hr);
+    zones = [
+      { name: 'Alle LT1', color: '#86efac', low: null, high: lt1I2, hrLow: null, hrHigh: lt1HR2 },
+      { name: 'LT1-alue', color: '#93c5fd', low: lt1I2, high: lt1I2 * 1.15, hrLow: lt1HR2, hrHigh: Math.round(lt1HR2 * 1.15) },
+      { name: 'Yli LT1', color: '#fde047', low: lt1I2 * 1.15, high: null, hrLow: Math.round(lt1HR2 * 1.15), hrHigh: null }
+    ];
+  }
+
+  var fmtRange = function (low, high) {
+    if (!low && low !== 0) return '< ' + formatIntensity(high);
+    if (!high && high !== 0) return '> ' + formatIntensity(low);
+    return formatIntensity(low) + ' \u2013 ' + formatIntensity(high);
+  };
+  var fmtHR = function (low, high) {
+    if (!low && low !== 0) return '< ' + high + ' bpm';
+    if (!high && high !== 0) return '> ' + low + ' bpm';
+    return low + ' \u2013 ' + high + ' bpm';
+  };
+
+  var html = '<table class="zones-table"><thead><tr><th>Vy\u00f6hyke</th><th>Intensiteetti</th><th>Syke</th></tr></thead><tbody>';
+  zones.forEach(function (z) {
+    html += '<tr><td><span class="zone-color" style="background:' + z.color + '"></span><span class="zone-name">' + z.name + '</span></td>';
+    html += '<td>' + fmtRange(z.low, z.high) + '</td>';
+    html += '<td>' + fmtHR(z.hrLow, z.hrHigh) + '</td></tr>';
+  });
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
+  section.style.display = '';
 }
 
 // ── Chart ────────────────────────────────────────────────
