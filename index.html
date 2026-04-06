@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>LT Analyzer – Laktaattikynnystesti</title>
+  <meta name="description" content="Analysoi laktaattikynnykset (LT1 ja LT2) pyöräily- tai juoksutestistä kuudella tieteellisellä menetelmällä.">
+  <meta name="theme-color" content="#2563eb">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <div class="header-inner">
+    <span class="header-icon">⚡</span>
+    <div class="header-title">
+      <h1>LT <em>Analyzer</em></h1>
+      <span class="header-sub">Laktaattikynnystesti</span>
+    </div>
+  </div>
+</header>
+
+<main>
+
+  <!-- ══════════════════════════════════════ NÄYTTÖ 1: SYÖTTÖ -->
+  <div id="screen-input">
+
+    <!-- Lajivalinta -->
+    <div class="section sport-section">
+      <div class="sport-toggle" role="group" aria-label="Valitse laji">
+        <button id="btn-cycling" class="sport-btn active"
+                onclick="setSport('cycling')">🚴 Pyöräily</button>
+        <button id="btn-running" class="sport-btn"
+                onclick="setSport('running')">🏃 Juoksu</button>
+      </div>
+    </div>
+
+    <!-- Tuonti / Vienti -->
+    <div class="section import-row">
+      <button class="btn-outline" onclick="downloadTemplate()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/>
+          <line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        JSON-pohja
+      </button>
+      <button class="btn-outline" onclick="document.getElementById('json-upload').click()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+        Tuo JSON
+      </button>
+      <input type="file" id="json-upload" accept=".json" style="display:none"
+             onchange="handleFileUpload(event)">
+    </div>
+
+    <!-- Taulukko -->
+    <div class="section">
+      <div class="table-scroll">
+        <table class="steps-table" id="steps-table">
+          <thead>
+            <tr>
+              <th class="col-num">#</th>
+              <th class="col-intensity" id="intensity-header">Teho (W)</th>
+              <th class="col-hr">Syke (bpm)</th>
+              <th class="col-lac">Laktaatti (mmol/L)</th>
+              <th class="col-del"></th>
+            </tr>
+          </thead>
+          <tbody id="steps-tbody"></tbody>
+        </table>
+      </div>
+      <button class="btn-add" onclick="addStep()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+          <line x1="12" y1="5" x2="12" y2="19"/>
+          <line x1="5" y1="12" x2="19" y2="12"/>
+        </svg>
+        Lisää askel
+      </button>
+    </div>
+
+    <!-- Virheviesti -->
+    <div class="error-msg" id="error-msg" role="alert"></div>
+
+    <!-- Analysoi-nappi -->
+    <div class="section analyze-row">
+      <button class="btn-primary" onclick="validateAndAnalyze()">
+        Analysoi
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+          <polyline points="9 18 15 12 9 6"/>
+        </svg>
+      </button>
+    </div>
+
+  </div><!-- /#screen-input -->
+
+
+  <!-- ══════════════════════════════════════ NÄYTTÖ 2: TULOKSET -->
+  <div id="screen-results" class="hidden">
+
+    <!-- Takaisin -->
+    <button class="back-btn" onclick="showScreen('input')">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+        <polyline points="15 18 9 12 15 6"/>
+      </svg>
+      Muokkaa tietoja
+    </button>
+
+    <!-- Metodivalinta -->
+    <div class="section">
+      <div class="section-label">Määritysmetodi</div>
+      <div class="method-pills" id="method-pills" role="tablist"
+           aria-label="Valitse laskentametodi"></div>
+    </div>
+
+    <!-- Kaavio -->
+    <div class="section">
+      <div class="chart-wrap">
+        <canvas id="lt-chart"></canvas>
+      </div>
+    </div>
+
+    <!-- LT-kortit -->
+    <div class="section lt-cards">
+
+      <div class="lt-card lt1-card" id="lt1-card">
+        <div class="card-tag">LT1 — Aerobinen kynnys</div>
+        <div class="card-main" id="lt1-intensity">—</div>
+        <div class="card-hr"  id="lt1-hr"></div>
+        <div class="card-lac" id="lt1-lac"></div>
+      </div>
+
+      <div class="lt-card lt2-card" id="lt2-card">
+        <div class="card-tag">LT2 — Anaerobinen kynnys</div>
+        <div class="card-main" id="lt2-intensity">—</div>
+        <div class="card-hr"  id="lt2-hr"></div>
+        <div class="card-lac" id="lt2-lac"></div>
+      </div>
+
+    </div>
+
+    <!-- Metodikuvaus -->
+    <div class="section">
+      <div class="method-info" id="method-info">
+        <div class="info-name" id="info-name"></div>
+        <div class="info-desc" id="info-desc"></div>
+        <div class="info-ref"  id="info-ref"></div>
+      </div>
+    </div>
+
+  </div><!-- /#screen-results -->
+
+</main>
+
+<!-- Toast-ilmoitus -->
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
