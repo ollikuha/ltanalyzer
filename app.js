@@ -656,8 +656,16 @@ function showResults(sortedSteps) {
   state.pairKey = 'obla';
   state.lt1Key  = null;
   state.lt2Key  = null;
-  buildMethodSelectors(sortedSteps);
-  syncSelectorUI();
+  try {
+    buildMethodSelectors(sortedSteps);
+  } catch (e) {
+    console.error('LT Analyzer: buildMethodSelectors failed:', e);
+  }
+  try {
+    syncSelectorUI();
+  } catch (e) {
+    console.error('LT Analyzer: syncSelectorUI failed:', e);
+  }
   computeAndDisplay(sortedSteps);
 }
 
@@ -799,7 +807,11 @@ function computeAndDisplay(sortedSteps) {
     }
   } catch (e) { /* leave nulls */ }
   updateLtCards(result);
-  renderChart(sortedSteps, result);
+  try {
+    renderChart(sortedSteps, result);
+  } catch (e) {
+    console.error('LT Analyzer: renderChart failed:', e);
+  }
   updateMethodInfo();
 }
 
@@ -971,6 +983,11 @@ function renderChart(steps, result) {
       order: 0,
       yAxisID: 'yLac'
     });
+  }
+
+  if (typeof Chart === 'undefined') {
+    console.error('LT Analyzer: Chart.js not loaded');
+    return;
   }
 
   const isRunning = state.sport === 'running';
