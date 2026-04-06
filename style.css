@@ -356,7 +356,7 @@ main {
 }
 .selector-btn:disabled { opacity: 0.38; cursor: not-allowed; pointer-events: none; }
 
-.individual-section--disabled { opacity: 0.42; pointer-events: none; user-select: none; }
+.individual-section--disabled { opacity: 0.42; }
 
 .individual-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .individual-col { display: flex; flex-direction: column; gap: 6px; }
