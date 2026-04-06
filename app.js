@@ -27,7 +27,7 @@ const PAIR_METHODS = [
     key: 'ltp',
     label: 'LTP1 / LTP2',
     ref: 'Polynomisovitus, 2. derivaatta',
-    desc: 'Polynomisovituksen (aste 4) toisen derivaatan nollakohdat antavat laktaattikäyrän taitekohtia. Ensimmäinen nollakohta = LTP1 (aerobinen), toinen = LTP2 (anaerobinen kynnys).',
+    desc: 'Polynomisovituksen (aste 4) toisen derivaatan nollakohdat antavat laktaattikäyrän taitekohtia. Ensimmäinen nollakohta = LTP1 (aerobinen), toinen = LTP2 (anaerobinen kynnys). Jos selkeitä erillisiä taitekohtia ei löydy (esim. "hockeymailakäyrä"), LTP2 arvioidaan automaattisesti Dmax-menetelmällä.',
     calc: calcInflection
   }
 ];
@@ -316,28 +316,76 @@ function findMaxSecondDerivative(a, b, c, tMin, tMax) {
   return bestT;
 }
 
+// Build L''(t) quadratic coefficients from a degree-4 poly's coeffs array.
+function _ltpSecondDerivCoeffs(poly) {
+  const c = poly.coeffs;
+  return { qa: 12*(c[4]||0), qb: 6*(c[3]||0), qc: 2*(c[2]||0) };
+}
+
+// LT2 fallback used by all LTP functions when L''(t)=0 roots are absent or
+// land in the flat plateau:
+//   • For concave-down L'' (qa < 0): its interior maximum marks the point of
+//     greatest lactate acceleration — a solid physiological LT2 proxy.
+//   • For concave-up L'' (qa ≥ 0): the maximum of the parabola is at an
+//     endpoint (last step) which is useless, so fall back to D2max — the
+//     perpendicular-distance method that is robust for S-shaped curves.
+function _ltpLT2Fallback(steps, poly, qa, qb, qc, minLT2Lac) {
+  const toX = t => poly.xMin + t * poly.xRange;
+  if (qa < 0) {
+    const tMax = findMaxSecondDerivative(qa, qb, qc, 0.05, 0.95);
+    const pt   = interpolateAtIntensity(steps, toX(tMax));
+    if (pt && pt.lactate >= minLT2Lac) return pt;
+  }
+  // D2max on the measured steps (robust for both hockey-stick and S-curves)
+  const r = calcDmax(steps);
+  return (r && r.lt2 && r.lt2.lactate >= minLT2Lac) ? r.lt2 : null;
+}
+
 function calcInflection(steps) {
   try {
     if (steps.length < 5) return { lt1: null, lt2: null };
     const xs = steps.map(s => s.intensity);
     const ys = steps.map(s => s.lactate);
     const poly = fitPoly(xs, ys, 4);
-    const c = poly.coeffs;
-    // L''(t) = 2*c[2] + 6*c[3]*t + 12*c[4]*t^2
-    const qa = 12 * (c[4] || 0);
-    const qb =  6 * (c[3] || 0);
-    const qc =  2 * (c[2] || 0);
-    const roots = solveQuadraticInRange(qa, qb, qc, 0.05, 0.95);
+    const { qa, qb, qc } = _ltpSecondDerivCoeffs(poly);
     const toX = t => poly.xMin + t * poly.xRange;
+
+    // A threshold root is only accepted when its interpolated lactate lies
+    // meaningfully above the initial plateau.  Relative thresholds avoid
+    // spurious roots that land in the flat baseline region of hockey-stick
+    // shaped curves.
+    const lacMin    = Math.min(...ys);
+    const lacRange  = Math.max(...ys) - lacMin;
+    const minLT1Lac = lacMin + Math.max(0.2, 0.05 * lacRange);
+    const minLT2Lac = lacMin + Math.max(0.5, 0.15 * lacRange);
+    const fb        = () => _ltpLT2Fallback(steps, poly, qa, qb, qc, minLT2Lac);
+
+    const roots = solveQuadraticInRange(qa, qb, qc, 0.05, 0.95);
+
     if (roots.length >= 2) {
-      return {
-        lt1: interpolateAtIntensity(steps, toX(roots[0])),
-        lt2: interpolateAtIntensity(steps, toX(roots[1]))
-      };
+      const pt1 = interpolateAtIntensity(steps, toX(roots[0]));
+      const pt2 = interpolateAtIntensity(steps, toX(roots[1]));
+      const separated = roots[1] - roots[0] >= 0.12;
+      const lacDiff   = pt1 && pt2 && pt2.lactate - pt1.lactate >= 0.5;
+      const lt1ok     = pt1 && pt1.lactate >= minLT1Lac;
+      const lt2ok     = pt2 && pt2.lactate >= minLT2Lac;
+      // Two well-separated roots with a meaningful lactate span → accept both
+      // as valid LTP1 / LTP2 without further absolute-level checks.
+      if (separated && lacDiff) return { lt1: pt1, lt2: pt2 };
+      // Roots are close together or at the same lactate level (spurious pair).
+      // roots[1] is invalid as LT2; check whether roots[1] passes the absolute
+      // lactate threshold anyway (handles the case where roots[0] is in the
+      // plateau but roots[1] genuinely represents LT2).
+      if (lt2ok) return { lt1: null, lt2: pt2 };
+      // Neither root is a valid LT2.  roots[0] may still be a valid LT1;
+      // use the D2max / L''-max fallback for LT2.
+      return { lt1: lt1ok ? pt1 : null, lt2: fb() };
     } else if (roots.length === 1) {
-      return { lt1: null, lt2: interpolateAtIntensity(steps, toX(roots[0])) };
+      const pt = interpolateAtIntensity(steps, toX(roots[0]));
+      if (pt && pt.lactate >= minLT2Lac) return { lt1: null, lt2: pt };
+      return { lt1: null, lt2: fb() };
     }
-    return { lt1: null, lt2: null };
+    return { lt1: null, lt2: fb() };
   } catch (e) {
     return { lt1: null, lt2: null };
   }
@@ -357,14 +405,24 @@ function calcLTP1(steps) {
     const xs = steps.map(s => s.intensity);
     const ys = steps.map(s => s.lactate);
     const poly = fitPoly(xs, ys, 4);
-    const c = poly.coeffs;
-    const qa = 12 * (c[4] || 0);
-    const qb =  6 * (c[3] || 0);
-    const qc =  2 * (c[2] || 0);
+    const { qa, qb, qc } = _ltpSecondDerivCoeffs(poly);
     const roots = solveQuadraticInRange(qa, qb, qc, 0.05, 0.95);
-    if (roots.length === 0) return { lt1: null, lt2: null };
-    const x = poly.xMin + roots[0] * poly.xRange;
-    return { lt1: interpolateAtIntensity(steps, x), lt2: null };
+    if (roots.length < 2) return { lt1: null, lt2: null };
+    const toX   = t => poly.xMin + t * poly.xRange;
+    const pt1   = interpolateAtIntensity(steps, toX(roots[0]));
+    const pt2   = interpolateAtIntensity(steps, toX(roots[1]));
+    const lacMin    = Math.min(...ys);
+    const lacRange  = Math.max(...ys) - lacMin;
+    const minLT1Lac = lacMin + Math.max(0.2,  0.05 * lacRange);
+    const minLT2Lac = lacMin + Math.max(0.5,  0.15 * lacRange);
+    const separated = roots[1] - roots[0] >= 0.12;
+    const lacDiff   = pt1 && pt2 && pt2.lactate - pt1.lactate >= 0.5;
+    const lt1ok     = pt1 && pt1.lactate >= minLT1Lac;
+    const lt2ok     = pt2 && pt2.lactate >= minLT2Lac;
+    if (separated && lacDiff && lt1ok && lt2ok) {
+      return { lt1: pt1, lt2: null };
+    }
+    return { lt1: null, lt2: null };
   } catch (e) {
     return { lt1: null, lt2: null };
   }
@@ -376,20 +434,28 @@ function calcLTP2(steps) {
     const xs = steps.map(s => s.intensity);
     const ys = steps.map(s => s.lactate);
     const poly = fitPoly(xs, ys, 4);
-    const c = poly.coeffs;
-    const qa = 12 * (c[4] || 0);
-    const qb =  6 * (c[3] || 0);
-    const qc =  2 * (c[2] || 0);
+    const { qa, qb, qc } = _ltpSecondDerivCoeffs(poly);
+    const toX       = t => poly.xMin + t * poly.xRange;
+    const lacMin    = Math.min(...ys);
+    const lacRange  = Math.max(...ys) - lacMin;
+    const minLT2Lac = lacMin + Math.max(0.5, 0.15 * lacRange);
+    const fb = () => _ltpLT2Fallback(steps, poly, qa, qb, qc, minLT2Lac);
     const roots = solveQuadraticInRange(qa, qb, qc, 0.05, 0.95);
-    const toX = t => poly.xMin + t * poly.xRange;
     if (roots.length >= 2) {
-      return { lt1: null, lt2: interpolateAtIntensity(steps, toX(roots[1])) };
+      const pt1 = interpolateAtIntensity(steps, toX(roots[0]));
+      const pt2 = interpolateAtIntensity(steps, toX(roots[1]));
+      const separated = roots[1] - roots[0] >= 0.12;
+      const lacDiff   = pt1 && pt2 && pt2.lactate - pt1.lactate >= 0.5;
+      const lt2ok     = pt2 && pt2.lactate >= minLT2Lac;
+      if (separated && lacDiff && lt2ok) return { lt1: null, lt2: pt2 };
+      if (lt2ok)                         return { lt1: null, lt2: pt2 };
+      return { lt1: null, lt2: fb() };
     } else if (roots.length === 1) {
-      return { lt1: null, lt2: interpolateAtIntensity(steps, toX(roots[0])) };
+      const pt = interpolateAtIntensity(steps, toX(roots[0]));
+      if (pt && pt.lactate >= minLT2Lac) return { lt1: null, lt2: pt };
+      return { lt1: null, lt2: fb() };
     }
-    // No roots: use the t where L''(t) is maximized
-    const tMax = findMaxSecondDerivative(qa, qb, qc, 0.05, 0.95);
-    return { lt1: null, lt2: interpolateAtIntensity(steps, toX(tMax)) };
+    return { lt1: null, lt2: fb() };
   } catch (e) {
     return { lt1: null, lt2: null };
   }
