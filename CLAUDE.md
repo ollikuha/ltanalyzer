@@ -8,19 +8,77 @@ Critical information for AI agents working on this project.
 
 - **No build step.** No npm, no bundler, no TypeScript. The repository must stay deployable as a static site by opening `index.html` directly or via GitHub Pages.
 - **No new external dependencies.** Chart.js 4.4.4 from CDN is the only allowed external script. Do not add other libraries.
-- **Syntax check before committing:** Run `node --check app.js` after editing `app.js` to catch parse errors before they reach the browser.
+- **No ES modules.** Do not use `<script type="module">` or `import`/`export` syntax. The site must work via `file://` protocol, which blocks module loading due to CORS. All functions are globals loaded via classic `<script>` tags in order.
+- **Syntax check before committing:** Run `node --check` on every `.js` file you touch. Node's `--check` flag only validates syntax — it will not complain about unresolved globals (e.g. `fitPoly` in `dmax.js`), which is intentional.
+
+```bash
+node --check app.js
+node --check algorithms/shared.js
+node --check algorithms/obla.js
+node --check algorithms/baseline.js
+node --check algorithms/dmax.js
+node --check algorithms/loglog.js
+node --check algorithms/ltp.js
+node --check algorithms/d2max.js
+node --check algorithms/nadir.js
+```
 
 ---
 
 ## File Structure
 
 ```
-index.html   — App shell; two screens toggled by .hidden class
-app.js       — All logic: state, algorithms, UI, chart (~970 lines)
-style.css    — All styles, mobile-first, CSS custom properties
-README.md    — User-facing documentation (English)
-CLAUDE.md    — This file
+index.html          — App shell; screens toggled by .hidden class
+app.js              — State, method registries, all UI/DOM logic (~1 250 lines)
+style.css           — All styles, mobile-first, CSS custom properties
+algorithms/
+  shared.js         — Shared math utilities (fitPoly, interpolation, etc.)
+  obla.js           — calcOBLA, calcOBLACustom
+  baseline.js       — calcBaselinePlus04, calcBaselinePlus10
+  dmax.js           — calcDmax, calcModDmax
+  loglog.js         — calcLogLog
+  ltp.js            — calcInflection, calcLTP1, calcLTP2
+  d2max.js          — calcD2max
+  nadir.js          — Nadir-segmentti + primaarialgo + calcNadirBreakpoint
+README.md           — User-facing documentation (English)
+CLAUDE.md           — This file
 ```
+
+---
+
+## Script Loading Order (index.html)
+
+Scripts are loaded in dependency order. **Do not change this order.**
+
+```html
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="algorithms/shared.js"></script>   <!-- no deps -->
+<script src="algorithms/obla.js"></script>      <!-- needs: shared.js globals -->
+<script src="algorithms/baseline.js"></script>  <!-- needs: shared.js globals -->
+<script src="algorithms/dmax.js"></script>      <!-- needs: shared.js globals -->
+<script src="algorithms/loglog.js"></script>    <!-- needs: shared.js globals -->
+<script src="algorithms/ltp.js"></script>       <!-- needs: shared.js globals -->
+<script src="algorithms/d2max.js"></script>     <!-- needs: shared.js globals -->
+<script src="algorithms/nadir.js"></script>     <!-- self-contained -->
+<script src="app.js"></script>                  <!-- last: defines LT2_METHODS etc. -->
+```
+
+`app.js` must be last because `calcOBLACustom` (in `obla.js`) reads `LT2_METHODS[5].customThreshold` at runtime — this global is defined in `app.js` and is always available before any user interaction.
+
+---
+
+## Algorithm Files — Contents and Dependencies
+
+| File | Contains | Depends on (globals from) |
+|------|----------|--------------------------|
+| `algorithms/shared.js` | `fitPoly`, `solveQuadraticInRange`, `findMaxSecondDerivative`, `interpolateAtLactate`, `interpolateAtIntensity`, `baselineLactate`, `perpDist`, `linearFit`, `linearSSR`, `_ltpSecondDerivCoeffs`, `_ltpLT2Fallback`, `calcR2` | nothing |
+| `algorithms/obla.js` | `calcOBLA`, `calcOBLACustom` | `shared.js`, `LT2_METHODS` (app.js, runtime only) |
+| `algorithms/baseline.js` | `calcBaselinePlus04`, `calcBaselinePlus10` | `shared.js` |
+| `algorithms/dmax.js` | `calcDmax`, `calcModDmax` | `shared.js` |
+| `algorithms/loglog.js` | `calcLogLog` | `shared.js` |
+| `algorithms/ltp.js` | `calcInflection`, `calcLTP1`, `calcLTP2` | `shared.js` |
+| `algorithms/d2max.js` | `calcD2max` | `shared.js` |
+| `algorithms/nadir.js` | Nadir-breakpoint-algoritmi, primaarialgo, `calcNadirBreakpoint` | self-contained (own private helpers) |
 
 ---
 
@@ -52,33 +110,34 @@ const state = {
 
 ## Method Registries
 
-Three arrays define all available methods. Each entry has `{ key, label, ref, calc }`.
+Three arrays in `app.js` define all available methods. Each entry has `{ key, label, ref, desc, calc }`.
 
 ### `PAIR_METHODS` — produce both LT1 and LT2
 
-| key | label | calc function |
-|-----|-------|---------------|
-| `obla` | OBLA 2.0 / 4.0 mmol/L | `calcOBLA` |
-| `ltp` | LTP1 / LTP2 | `calcInflection` |
+| key | label | calc function | file |
+|-----|-------|---------------|------|
+| `obla` | OBLA 2.0 / 4.0 mmol/L | `calcOBLA` | `algorithms/obla.js` |
+| `nadir_breakpoint` | Nadir-segmenttialgoritmi | `calcNadirBreakpoint` | `algorithms/nadir.js` |
+| `ltp` | LTP1 / LTP2 | `calcInflection` | `algorithms/ltp.js` |
 
 ### `LT1_METHODS` — produce LT1 only (lt2 always null)
 
-| key | label | calc function |
-|-----|-------|---------------|
-| `baseline04` | Baseline + 0.4 mmol/L | `calcBaselinePlus04` |
-| `baseline10` | Baseline + 1.0 mmol/L | `calcBaselinePlus10` |
-| `ltp1` | LTP1 — Ensimmäinen taitekohta | `calcLTP1` |
+| key | label | calc function | file |
+|-----|-------|---------------|------|
+| `baseline04` | Baseline + 0.4 mmol/L | `calcBaselinePlus04` | `algorithms/baseline.js` |
+| `baseline10` | Baseline + 1.0 mmol/L | `calcBaselinePlus10` | `algorithms/baseline.js` |
+| `ltp1` | LTP1 — Ensimmäinen taitekohta | `calcLTP1` | `algorithms/ltp.js` |
 
 ### `LT2_METHODS` — produce LT2 only (lt1 always null)
 
-| key | label | calc function |
-|-----|-------|---------------|
-| `ltp2` | LTP2 — Toinen taitekohta | `calcLTP2` |
-| `dmax` | Dmax | `calcDmax` |
-| `moddmax` | Modified Dmax | `calcModDmax` |
-| `loglog` | Log-Log | `calcLogLog` |
-| `d2max` | D2max | `calcD2max` |
-| `obla_custom` | OBLA (mukautettu) | `calcOBLACustom` |
+| key | label | calc function | file |
+|-----|-------|---------------|------|
+| `ltp2` | LTP2 — Toinen taitekohta | `calcLTP2` | `algorithms/ltp.js` |
+| `dmax` | Dmax | `calcDmax` | `algorithms/dmax.js` |
+| `moddmax` | Modified Dmax | `calcModDmax` | `algorithms/dmax.js` |
+| `loglog` | Log-Log | `calcLogLog` | `algorithms/loglog.js` |
+| `d2max` | D2max | `calcD2max` | `algorithms/d2max.js` |
+| `obla_custom` | OBLA (mukautettu) | `calcOBLACustom` | `algorithms/obla.js` |
 
 ---
 
@@ -95,23 +154,24 @@ All calc functions receive `sortedSteps` (sorted ascending by intensity) and ret
   lactate: number }
 ```
 
-| Function | Strategy | Min steps |
-|----------|----------|-----------|
-| `calcOBLA` | Linear interpolation at 2.0 and 4.0 mmol/L | 2 |
-| `calcDmax` | Cubic poly; max perpendicular distance to first-last line | 4 |
-| `calcModDmax` | Like Dmax; reference line starts at baseline+0.4 point | 4 |
-| `calcLogLog` | Brute-force split in log-log space; line intersection | 4 |
-| `calcInflection` | Degree-4 poly L″(t)=0 zero-crossings → LT1 + LT2 | 5 |
-| `calcBaselinePlus04` | `baseline(avg first 2) + 0.4` interpolation | 2 |
-| `calcBaselinePlus10` | `baseline(avg first 2) + 1.0` interpolation | 2 |
-| `calcOBLACustom` | Configurable OBLA threshold (default 3.5) | 2 |
-| `calcLTP1` | First L″(t)=0 root → LT1 | 5 |
-| `calcLTP2` | Second L″(t)=0 root (fallback: L″ max) → LT2 | 5 |
-| `calcD2max` | L″(t) maximum in [0.05, 0.95] → LT2 | 5 |
+| Function | File | Strategy | Min steps |
+|----------|------|----------|-----------|
+| `calcOBLA` | `obla.js` | Linear interpolation at 2.0 and 4.0 mmol/L | 2 |
+| `calcNadirBreakpoint` | `nadir.js` | Segmentation: nadir anchor + slope-based LT2 | 6 |
+| `calcDmax` | `dmax.js` | Cubic poly; max perpendicular distance to first-last line | 4 |
+| `calcModDmax` | `dmax.js` | Like Dmax; reference line starts at baseline+0.4 point | 4 |
+| `calcLogLog` | `loglog.js` | Brute-force split in log-log space; line intersection | 4 |
+| `calcInflection` | `ltp.js` | Degree-4 poly L″(t)=0 zero-crossings → LT1 + LT2 | 5 |
+| `calcBaselinePlus04` | `baseline.js` | `baseline(avg first 2) + 0.4` interpolation | 2 |
+| `calcBaselinePlus10` | `baseline.js` | `baseline(avg first 2) + 1.0` interpolation | 2 |
+| `calcOBLACustom` | `obla.js` | Configurable OBLA threshold (default 3.5) | 2 |
+| `calcLTP1` | `ltp.js` | First L″(t)=0 root → LT1 | 5 |
+| `calcLTP2` | `ltp.js` | Second L″(t)=0 root (fallback: L″ max) → LT2 | 5 |
+| `calcD2max` | `d2max.js` | L″(t) maximum in [0.05, 0.95] → LT2 | 5 |
 
 ---
 
-## Key Shared Helpers
+## Key Shared Helpers (`algorithms/shared.js`)
 
 ```js
 // Fit degree-N polynomial; x values normalized to [0,1] for numerical stability
@@ -139,7 +199,33 @@ calcR2(xs, ys, evalFn)  // → number
 
 ---
 
-## Key UI Functions
+## Adding a New Method
+
+### New paired method (produces both LT1 and LT2)
+
+1. Create (or choose an existing) file in `algorithms/` — e.g. `algorithms/mymethod.js`
+2. Write `calcMyMethod(steps)` → `{ lt1, lt2 }` using helpers from `shared.js` as globals
+3. Add `<script src="algorithms/mymethod.js"></script>` to `index.html` **before** `<script src="app.js">`
+4. Add entry to `PAIR_METHODS` in `app.js`: `{ key:'mymethod', label:'...', ref:'...', desc:'...', calc: calcMyMethod }`
+5. Done — `buildMethodSelectors` picks it up automatically
+
+### New individual LT1 method
+
+1. Write `calcMyLT1(steps)` → `{ lt1: ..., lt2: null }` in an appropriate file under `algorithms/`
+2. Add the script tag to `index.html`
+3. Add entry to `LT1_METHODS` in `app.js`
+
+### New individual LT2 method
+
+1. Write `calcMyLT2(steps)` → `{ lt1: null, lt2: ... }` in an appropriate file under `algorithms/`
+2. Add the script tag to `index.html`
+3. Add entry to `LT2_METHODS` in `app.js`
+
+No other changes needed. The selector UI, chart, and cards all update automatically.
+
+---
+
+## Key UI Functions (`app.js`)
 
 ```js
 // Rebuild entire selector DOM inside #method-selector
@@ -191,28 +277,6 @@ updateFitQuality(sortedSteps)
 
 ---
 
-## Adding a New Method
-
-### New paired method (produces both LT1 and LT2)
-
-1. Write `calcMyMethod(steps)` → `{ lt1, lt2 }`
-2. Add entry to `PAIR_METHODS`: `{ key:'mymethod', label:'...', ref:'...', calc: calcMyMethod }`
-3. Done — `buildMethodSelectors` picks it up automatically
-
-### New individual LT1 method
-
-1. Write `calcMyLT1(steps)` → `{ lt1: ..., lt2: null }`
-2. Add entry to `LT1_METHODS`
-
-### New individual LT2 method
-
-1. Write `calcMyLT2(steps)` → `{ lt1: null, lt2: ... }`
-2. Add entry to `LT2_METHODS`
-
-No other changes needed. The selector UI, chart, and cards all update automatically.
-
----
-
 ## CSS Naming Conventions
 
 - `--lt1` / `--lt2` — CSS custom properties for threshold colors (blue / orange)
@@ -260,6 +324,6 @@ Screens are toggled with `el.classList.toggle('hidden')`. No router or hash navi
 
 ## Git Branch
 
-Development branch: `claude/lactate-threshold-analyzer-oh9EE`
+Development branch: `claude/refactor-algorithm-modules-jmAkh`
 
 All feature changes go here first, then merge to `main`.
