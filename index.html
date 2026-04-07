@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>LT Analyzer – Laktaattikynnystesti</title>
-  <meta name="description" content="Analysoi laktaattikynnykset (LT1 ja LT2) pyöräily- tai juoksutestistä kuudella tieteellisellä menetelmällä.">
+  <title>LT Analyzer - Laktaattikynnystesti</title>
+  <meta name="description" content="Analysoi laktaattikynnykset (LT1 ja LT2) pyoraily- tai juoksutestista uuden oletusalgoritmin avulla ja vertaa perinteisia menetelmia erillisessa nakymassa.">
   <meta name="theme-color" content="#2563eb">
   <link rel="stylesheet" href="style.css">
 </head>
@@ -22,20 +22,17 @@
 
 <main>
 
-  <!-- ══════════════════════════════════════ NÄYTTÖ 1: SYÖTTÖ -->
   <div id="screen-input">
 
-    <!-- Lajivalinta -->
     <div class="section sport-section">
       <div class="sport-toggle" role="group" aria-label="Valitse laji">
         <button id="btn-cycling" class="sport-btn active"
-                onclick="setSport('cycling')">🚴 Pyöräily</button>
+                onclick="setSport('cycling')">🚴 Pyoraily</button>
         <button id="btn-running" class="sport-btn"
                 onclick="setSport('running')">🏃 Juoksu</button>
       </div>
     </div>
 
-    <!-- Tuonti / Vienti -->
     <div class="section import-row">
       <button class="btn-outline" onclick="downloadTemplate()">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
@@ -59,7 +56,6 @@
              onchange="handleFileUpload(event)">
     </div>
 
-    <!-- Taulukko -->
     <div class="section">
       <div class="table-scroll">
         <table class="steps-table" id="steps-table">
@@ -81,14 +77,12 @@
           <line x1="12" y1="5" x2="12" y2="19"/>
           <line x1="5" y1="12" x2="19" y2="12"/>
         </svg>
-        Lisää askel
+        Lisaa askel
       </button>
     </div>
 
-    <!-- Virheviesti -->
     <div class="error-msg" id="error-msg" role="alert"></div>
 
-    <!-- Analysoi-nappi -->
     <div class="section analyze-row">
       <button class="btn-primary" onclick="validateAndAnalyze()">
         Analysoi
@@ -99,13 +93,11 @@
       </button>
     </div>
 
-  </div><!-- /#screen-input -->
+  </div>
 
 
-  <!-- ══════════════════════════════════════ NÄYTTÖ 2: TULOKSET -->
   <div id="screen-results" class="hidden">
 
-    <!-- Takaisin -->
     <button class="back-btn" onclick="showScreen('input')">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
            stroke="currentColor" stroke-width="2.5" aria-hidden="true">
@@ -114,79 +106,115 @@
       Muokkaa tietoja
     </button>
 
-    <!-- Metodivalinta -->
-    <div class="section">
-      <div class="section-label">Määritysmetodi</div>
-      <div class="method-selector" id="method-selector"
-           role="group" aria-label="Valitse laskentametodi"></div>
+    <div class="section results-nav">
+      <button class="btn-outline" onclick="openComparison()">Menetelmavertailu</button>
     </div>
 
-    <!-- Kaavio -->
     <div class="section">
       <div class="chart-wrap">
         <canvas id="lt-chart"></canvas>
       </div>
     </div>
 
-    <!-- LT-kortit -->
     <div class="section lt-cards">
-
       <div class="lt-card lt1-card" id="lt1-card">
-        <div class="card-tag">LT1 — Aerobinen kynnys</div>
-        <div class="card-main" id="lt1-intensity">—</div>
-        <div class="card-hr"  id="lt1-hr"></div>
+        <div class="card-tag">LT1 - Aerobinen kynnys</div>
+        <div class="card-main" id="lt1-intensity">-</div>
+        <div class="card-hr" id="lt1-hr"></div>
         <div class="card-lac" id="lt1-lac"></div>
       </div>
 
       <div class="lt-card lt2-card" id="lt2-card">
-        <div class="card-tag">LT2 — Anaerobinen kynnys</div>
-        <div class="card-main" id="lt2-intensity">—</div>
-        <div class="card-hr"  id="lt2-hr"></div>
+        <div class="card-tag">LT2 - Anaerobinen kynnys</div>
+        <div class="card-main" id="lt2-intensity">-</div>
+        <div class="card-hr" id="lt2-hr"></div>
         <div class="card-lac" id="lt2-lac"></div>
       </div>
-
     </div>
 
-    <!-- Harjoitusvyöhykkeet -->
     <div class="section" id="zones-section" style="display:none">
-      <div class="section-label">Harjoitusvyöhykkeet (konsensus)</div>
+      <div class="section-label">Harjoitusvyohykkeet</div>
       <div class="zones-table-wrap" id="zones-table-wrap"></div>
     </div>
 
-    <!-- Menetelmävertailu -->
-    <div class="section" id="comparison-section" style="display:none">
-      <div class="section-label">Menetelmävertailu</div>
-      <p class="comparison-hint">Kaikkien soveltuvien menetelmien tulokset samalla datalla.</p>
-      <div class="comparison-table-wrap" id="comparison-table-wrap"></div>
-      <div class="consensus-summary" id="consensus-summary"></div>
-    </div>
-
-    <!-- Datan laatu -->
     <div class="section" id="quality-section" style="display:none">
       <div class="section-label">Datan laatu</div>
       <div class="quality-report" id="quality-report"></div>
     </div>
 
-    <!-- Sovituksen laatu -->
+    <div class="section">
+      <div class="method-info" id="primary-method-info">
+        <div class="info-name" id="primary-info-name"></div>
+        <div class="info-desc" id="primary-info-desc"></div>
+        <div class="info-ref" id="primary-info-ref"></div>
+      </div>
+    </div>
+
+  </div>
+
+
+  <div id="screen-comparison" class="hidden">
+
+    <button class="back-btn" onclick="backToResults()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+        <polyline points="15 18 9 12 15 6"/>
+      </svg>
+      Takaisin tuloksiin
+    </button>
+
+    <div class="section">
+      <div class="section-label">Maaritysmetodi</div>
+      <div class="method-selector" id="method-selector"
+           role="group" aria-label="Valitse laskentametodi"></div>
+    </div>
+
+    <div class="section">
+      <div class="chart-wrap">
+        <canvas id="comparison-chart"></canvas>
+      </div>
+    </div>
+
+    <div class="section lt-cards">
+      <div class="lt-card lt1-card" id="comparison-lt1-card">
+        <div class="card-tag">LT1 - Aerobinen kynnys</div>
+        <div class="card-main" id="comparison-lt1-intensity">-</div>
+        <div class="card-hr" id="comparison-lt1-hr"></div>
+        <div class="card-lac" id="comparison-lt1-lac"></div>
+      </div>
+
+      <div class="lt-card lt2-card" id="comparison-lt2-card">
+        <div class="card-tag">LT2 - Anaerobinen kynnys</div>
+        <div class="card-main" id="comparison-lt2-intensity">-</div>
+        <div class="card-hr" id="comparison-lt2-hr"></div>
+        <div class="card-lac" id="comparison-lt2-lac"></div>
+      </div>
+    </div>
+
+    <div class="section" id="comparison-section" style="display:none">
+      <div class="section-label">Menetelmavertailu</div>
+      <p class="comparison-hint">Kaikkien soveltuvien menetelmien tulokset samalla datalla.</p>
+      <div class="comparison-table-wrap" id="comparison-table-wrap"></div>
+      <div class="consensus-summary" id="consensus-summary"></div>
+    </div>
+
     <div class="section" id="fit-quality-section" style="display:none">
       <div class="section-label">Sovituksen laatu</div>
       <div class="fit-quality-report" id="fit-quality-report"></div>
     </div>
 
-    <!-- Metodikuvaus -->
     <div class="section">
       <div class="method-info" id="method-info">
         <div class="info-name" id="info-name"></div>
         <div class="info-desc" id="info-desc"></div>
-        <div class="info-ref"  id="info-ref"></div>
+        <div class="info-ref" id="info-ref"></div>
       </div>
     </div>
 
-  </div><!-- /#screen-results -->
+  </div>
 
 </main>
 
-<!-- Toast-ilmoitus -->
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>

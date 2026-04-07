@@ -157,6 +157,10 @@ main {
   -webkit-tap-highlight-color: transparent;
 }
 .btn-outline:hover { border-color: var(--primary); color: var(--primary); }
+.results-nav {
+  display: flex;
+  justify-content: flex-end;
+}
 
 /* ── Step table ─────────────────────────────────────────────────── */
 .table-scroll {
@@ -671,6 +675,7 @@ main {
   /* Analyze button full width */
   .analyze-row { justify-content: stretch; }
   .btn-primary  { width: 100%; justify-content: center; }
+  .results-nav .btn-outline { width: 100%; justify-content: center; }
 
   .header-inner { padding: 11px 14px; }
 

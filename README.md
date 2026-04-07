@@ -1,6 +1,6 @@
 # LT Analyzer
 
-A browser-based lactate threshold analyzer for cycling and running. Enter data from a graded exercise test and get LT1 (aerobic threshold) and LT2 (anaerobic threshold) estimates using up to nine scientifically validated methods.
+A browser-based lactate threshold analyzer for cycling and running. Enter data from a graded exercise test and get LT1 (aerobic threshold) and LT2 (anaerobic threshold) estimates directly from the default `lactatetest_v3` algorithm, then compare legacy methods in a separate comparison view.
 
 **No build step. No backend. No dependencies beyond Chart.js.** Works entirely in the browser — host on GitHub Pages or open `index.html` locally.
 
@@ -9,20 +9,21 @@ A browser-based lactate threshold analyzer for cycling and running. Enter data f
 ## Features
 
 - **Two sports**: cycling (power in watts) and running (pace in MM:SS /km)
-- **Two-tier method selector**: choose a paired method (LT1 + LT2 simultaneously) or select LT1 and LT2 methods independently
-- **Nine algorithms**: covers threshold detection via fixed concentrations, polynomial inflection points, geometric distance, log-log regression, and second-derivative maximization
+- **Primary analysis view**: the Analyze action runs the default `lactatetest_v3` algorithm and shows LT1, LT2, chart, and training zones immediately
+- **Separate method comparison view**: legacy paired and individual LT methods are available in their own screen for side-by-side testing
+- **Nine comparison algorithms**: covers threshold detection via fixed concentrations, polynomial inflection points, geometric distance, log-log regression, and second-derivative maximization
 - **JSON import/export**: download a template, fill it in, upload to pre-populate the table
 - **Mobile-first**: responsive layout, touch-friendly controls
-- **Instant feedback**: chart and threshold cards update as you switch methods
+- **Instant feedback**: comparison chart and threshold cards update live as you switch legacy methods
 
 ---
 
 ## Usage
 
 1. Select **Pyöräily** (cycling) or **Juoksu** (running)
-2. Enter at least 5 steps: intensity (watts or MM:SS pace), heart rate, and blood lactate
-3. Click **Analysoi** to see results
-4. Switch methods in the results screen — the chart and threshold cards update live
+2. Enter at least 6 steps: intensity (watts or MM:SS pace), heart rate, and blood lactate
+3. Click **Analysoi** to run the default algorithm and open the primary results view
+4. Open **Menetelmavertailu** if you want to test legacy LT1/LT2 methods on the same data
 
 ### JSON import
 
@@ -116,7 +117,7 @@ Then visit `http://localhost:8080`.
 
 ```
 ltanalyzer/
-├── index.html   # App shell, two-screen layout
+├── index.html   # App shell, three-screen layout
 ├── app.js       # All application logic (~970 lines)
 ├── style.css    # All styles, mobile-first
 └── README.md    # This file

@@ -8,11 +8,292 @@
 const state = {
   sport: 'cycling',
   steps: [],
-  pairKey:  'obla',   // active paired method key, or null
-  lt1Key:   null,     // active individual LT1 method key, or null
-  lt2Key:   null,     // active individual LT2 method key, or null
-  chart: null
+  pairKey: 'obla',
+  lt1Key: null,
+  lt2Key: null,
+  chart: null,
+  comparisonChart: null,
+  currentScreen: 'input',
+  lastSortedSteps: [],
+  primaryResult: null,
+  primaryDebug: null
 };
+
+const PRIMARY_METHOD = {
+  key: 'lactatetest_v3',
+  label: 'Mukautettu segmenttialgoritmi',
+  ref: 'Perustuu lactatetest_v3-malliin',
+  desc: 'LT1 ja LT2 haetaan kahden paikallisen lineaarisen sovituksen leikkauspisteina. Algoritmi pisteyttaa useita ikkunoita, valitsee parhaat ehdokkaat ja interpoloi kynnyksille vastaavat laktaatti- ja syke-arvot.'
+};
+
+function analyzeLactateTest(points) {
+  const data = points.slice()
+    .filter(function (p) {
+      return Number.isFinite(p && p.speed) && Number.isFinite(p && p.lactate);
+    })
+    .sort(function (a, b) { return a.speed - b.speed; });
+
+  if (data.length < 6) {
+    throw new Error('Tarvitaan vahintaan 6 validia pistetta.');
+  }
+
+  const lt1Candidate = findLt1Candidate(data);
+  const lt2Candidate = findLt2Candidate(data);
+
+  return {
+    lt1: buildThresholdResult(data, lt1Candidate, 'LT1'),
+    lt2: buildThresholdResult(data, lt2Candidate, 'LT2'),
+    debug: {
+      lt1Candidate: lt1Candidate,
+      lt2Candidate: lt2Candidate
+    }
+  };
+}
+
+function findLt1Candidate(points) {
+  const candidates = [];
+  const minSpeed = points[0].speed;
+  const maxSpeed = points[points.length - 1].speed;
+  const speedRange = (maxSpeed - minSpeed) || 1;
+
+  for (let a = 0; a < points.length; a++) {
+    for (const alen of [3, 4]) {
+      if (a + alen > points.length) continue;
+
+      const leftWindow = points.slice(a, a + alen);
+      const leftLine = fitSimpleLine(leftWindow);
+
+      for (let b = 0; b < points.length; b++) {
+        for (const blen of [3, 4]) {
+          if (b + blen > points.length) continue;
+
+          const rightWindow = points.slice(b, b + blen);
+          const rightLine = fitSimpleLine(rightWindow);
+
+          if (rightLine.m <= leftLine.m) continue;
+
+          const x = intersectSimpleLines(leftLine, rightLine);
+          if (!Number.isFinite(x)) continue;
+
+          const minX = points[a].speed;
+          const maxX = points[b + blen - 1].speed;
+          if (x < minX || x > maxX) continue;
+
+          const xNorm = (x - minSpeed) / speedRange;
+          if (xNorm > 0.55) continue;
+
+          const y = interpolateYAtX(points, x, 'lactate');
+          if (!Number.isFinite(y)) continue;
+
+          const gain = rightLine.m - leftLine.m;
+          const score =
+            0.5 * (leftLine.sse + rightLine.sse) +
+            0.5 * Math.abs(leftLine.m) +
+            1.0 * Math.abs(xNorm - 0.22) -
+            0.2 * gain +
+            0.1 * y;
+
+          candidates.push({
+            score: score,
+            x: x,
+            y: y,
+            leftSlope: leftLine.m,
+            rightSlope: rightLine.m,
+            leftWindow: { start: a, end: a + alen - 1 },
+            rightWindow: { start: b, end: b + blen - 1 }
+          });
+        }
+      }
+    }
+  }
+
+  if (candidates.length === 0) {
+    throw new Error('LT1-ehdokasta ei loytynyt.');
+  }
+
+  return candidates.reduce(function (best, candidate) {
+    return candidate.score < best.score ? candidate : best;
+  });
+}
+
+function findLt2Candidate(points) {
+  const candidates = [];
+  const minSpeed = points[0].speed;
+  const maxSpeed = points[points.length - 1].speed;
+  const speedRange = (maxSpeed - minSpeed) || 1;
+
+  for (let a = 0; a < points.length; a++) {
+    const alen = 2;
+    if (a + alen > points.length) continue;
+
+    const leftWindow = points.slice(a, a + alen);
+    const leftLine = fitSimpleLine(leftWindow);
+    const end = a + alen - 1;
+
+    for (let b = Math.max(0, end - 1); b <= Math.min(points.length - 1, end + 1); b++) {
+      for (const blen of [2, 3]) {
+        if (b + blen > points.length) continue;
+
+        const rightWindow = points.slice(b, b + blen);
+        const rightLine = fitSimpleLine(rightWindow);
+
+        if (rightLine.m <= leftLine.m) continue;
+
+        const x = intersectSimpleLines(leftLine, rightLine);
+        if (!Number.isFinite(x)) continue;
+
+        const minX = points[a].speed;
+        const maxX = points[b + blen - 1].speed;
+        if (x < minX || x > maxX) continue;
+
+        const xNorm = (x - minSpeed) / speedRange;
+        if (xNorm < 0.45) continue;
+
+        const y = interpolateYAtX(points, x, 'lactate');
+        if (!Number.isFinite(y)) continue;
+
+        const gain = rightLine.m - leftLine.m;
+        const gap = b - end;
+        const gapPenalty = Math.max(0, gap) + 0.6 * Math.max(0, -gap);
+        const score =
+          2.0 * Math.abs(xNorm - 0.58) +
+          0.5 * Math.abs(leftLine.m - 1.4) -
+          0.05 * gain +
+          0.2 * gapPenalty +
+          0.05 * Math.abs(y - 6.2);
+
+        candidates.push({
+          score: score,
+          x: x,
+          y: y,
+          leftSlope: leftLine.m,
+          rightSlope: rightLine.m,
+          leftWindow: { start: a, end: a + alen - 1 },
+          rightWindow: { start: b, end: b + blen - 1 }
+        });
+      }
+    }
+  }
+
+  if (candidates.length === 0) {
+    throw new Error('LT2-ehdokasta ei loytynyt.');
+  }
+
+  return candidates.reduce(function (best, candidate) {
+    return candidate.score < best.score ? candidate : best;
+  });
+}
+
+function buildThresholdResult(points, candidate, label) {
+  const speed = candidate.x;
+  const lactate = interpolateYAtX(points, speed, 'lactate');
+  const hr = hasFiniteKey(points, 'hr')
+    ? interpolateYAtX(points, speed, 'hr')
+    : null;
+
+  return {
+    label: label,
+    speed: round1(speed),
+    lactate: round1(lactate),
+    hr: hr === null ? null : Math.round(hr),
+    rawSpeed: round3(speed),
+    rawLactate: round3(lactate),
+    rawHr: hr === null ? null : round3(hr)
+  };
+}
+
+function fitSimpleLine(points) {
+  const n = points.length;
+  const xs = points.map(function (p) { return p.speed; });
+  const ys = points.map(function (p) { return p.lactate; });
+
+  const meanX = xs.reduce(function (sum, value) { return sum + value; }, 0) / n;
+  const meanY = ys.reduce(function (sum, value) { return sum + value; }, 0) / n;
+
+  let num = 0;
+  let den = 0;
+
+  for (let i = 0; i < n; i++) {
+    num += (xs[i] - meanX) * (ys[i] - meanY);
+    den += Math.pow(xs[i] - meanX, 2);
+  }
+
+  const m = den === 0 ? 0 : num / den;
+  const b = meanY - m * meanX;
+
+  let sse = 0;
+  for (let i = 0; i < n; i++) {
+    const pred = m * xs[i] + b;
+    sse += Math.pow(ys[i] - pred, 2);
+  }
+
+  return { m: m, b: b, sse: sse };
+}
+
+function intersectSimpleLines(line1, line2) {
+  const denom = line1.m - line2.m;
+  if (Math.abs(denom) < 1e-12) return NaN;
+  return (line2.b - line1.b) / denom;
+}
+
+function interpolateYAtX(points, x, key) {
+  if (x <= points[0].speed) return points[0][key] != null ? points[0][key] : NaN;
+  if (x >= points[points.length - 1].speed) {
+    return points[points.length - 1][key] != null ? points[points.length - 1][key] : NaN;
+  }
+
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i];
+    const b = points[i + 1];
+
+    if (x >= a.speed && x <= b.speed) {
+      if (!Number.isFinite(a[key]) || !Number.isFinite(b[key])) return NaN;
+
+      const t = (x - a.speed) / (b.speed - a.speed);
+      return a[key] + t * (b[key] - a[key]);
+    }
+  }
+
+  return NaN;
+}
+
+function hasFiniteKey(points, key) {
+  return points.some(function (p) { return Number.isFinite(p[key]); });
+}
+
+function round1(x) {
+  return Number(x.toFixed(1));
+}
+
+function round3(x) {
+  return Number(x.toFixed(3));
+}
+
+function convertPrimaryThreshold(point) {
+  if (!point) return null;
+  return {
+    intensity: Number.isFinite(point.rawSpeed) ? point.rawSpeed : point.speed,
+    lactate: Number.isFinite(point.rawLactate) ? point.rawLactate : point.lactate,
+    hr: Number.isFinite(point.rawHr) ? point.rawHr : point.hr
+  };
+}
+
+function analyzePrimaryAlgorithm(sortedSteps) {
+  const points = sortedSteps.map(function (step) {
+    return {
+      speed: step.intensity,
+      lactate: step.lactate,
+      hr: step.hr
+    };
+  });
+
+  const analyzed = analyzeLactateTest(points);
+  return {
+    lt1: convertPrimaryThreshold(analyzed.lt1),
+    lt2: convertPrimaryThreshold(analyzed.lt2),
+    debug: analyzed.debug || null
+  };
+}
 
 // ── Method registries ────────────────────────────────────
 const PAIR_METHODS = [
@@ -552,6 +833,27 @@ function formatIntensity(value) {
 function showScreen(id) {
   document.getElementById('screen-input').classList.toggle('hidden', id !== 'input');
   document.getElementById('screen-results').classList.toggle('hidden', id !== 'results');
+  document.getElementById('screen-comparison').classList.toggle('hidden', id !== 'comparison');
+  state.currentScreen = id;
+}
+
+function resetComparisonSelection() {
+  state.pairKey = 'obla';
+  state.lt1Key = null;
+  state.lt2Key = null;
+}
+
+function openComparison() {
+  if (!state.lastSortedSteps || state.lastSortedSteps.length === 0) return;
+  showScreen('comparison');
+  buildMethodSelectors(state.lastSortedSteps);
+  syncSelectorUI();
+  computeAndDisplay(state.lastSortedSteps);
+}
+
+function backToResults() {
+  showScreen('results');
+  showPrimaryResults();
 }
 
 function showToast(message, type) {
@@ -585,7 +887,7 @@ function setSport(sport) {
   document.getElementById('intensity-header').textContent =
     sport === 'cycling' ? 'Teho (W)' : 'Vauhti (min/km)';
   if (state.steps.length === 0) {
-    state.steps = [{}, {}, {}, {}, {}];
+    state.steps = [{}, {}, {}, {}, {}, {}];
   }
   renderStepTable();
 }
@@ -722,7 +1024,11 @@ function validateAndAnalyze() {
   clearError();
 
   const steps = state.steps;
-  if (steps.length < 4) {
+  if (steps.length < 6) {
+    showError('Tarvitaan vahintaan 6 mittausaskelta.');
+    return;
+  }
+  if (false && steps.length < 6) {
     showError('Tarvitaan vähintään 4 mittausaskelta.');
     return;
   }
@@ -749,27 +1055,42 @@ function validateAndAnalyze() {
     showToast('Rivit järjestetty nousevaan intensiteettijärjestykseen.', 'warning');
   }
 
-  showScreen('results');
-  showResults(sorted);
+  try {
+    const result = analyzePrimaryAlgorithm(sorted);
+    showResults(sorted, result);
+  } catch (e) {
+    showError(e && e.message ? e.message : 'Analyysi epaonnistui. Tarkista syottamasi data.');
+  }
 }
 
 // ── Results ──────────────────────────────────────────────
 
-function showResults(sortedSteps) {
-  state.pairKey = 'obla';
-  state.lt1Key  = null;
-  state.lt2Key  = null;
+function showResults(sortedSteps, primaryResult) {
+  state.lastSortedSteps = sortedSteps.slice();
+  state.primaryResult = {
+    lt1: primaryResult ? primaryResult.lt1 : null,
+    lt2: primaryResult ? primaryResult.lt2 : null
+  };
+  state.primaryDebug = primaryResult ? (primaryResult.debug || null) : null;
+  resetComparisonSelection();
+  showScreen('results');
+  showPrimaryResults();
+}
+
+function showPrimaryResults() {
+  if (!state.lastSortedSteps || state.lastSortedSteps.length === 0 || !state.primaryResult) return;
+  updateLtCards(state.primaryResult);
   try {
-    buildMethodSelectors(sortedSteps);
+    renderChart(state.lastSortedSteps, state.primaryResult, {
+      canvasId: 'lt-chart',
+      chartStateKey: 'chart'
+    });
   } catch (e) {
-    console.error('LT Analyzer: buildMethodSelectors failed:', e);
+    console.error('LT Analyzer: renderChart failed:', e);
   }
-  try {
-    syncSelectorUI();
-  } catch (e) {
-    console.error('LT Analyzer: syncSelectorUI failed:', e);
-  }
-  computeAndDisplay(sortedSteps);
+  updatePrimaryMethodInfo();
+  updateTrainingZones(state.primaryResult);
+  updateDataQuality(state.lastSortedSteps);
 }
 
 function buildMethodSelectors(sortedSteps) {
@@ -925,7 +1246,9 @@ function setLT2Method(key, sortedSteps) {
 
 function computeAndDisplay(sortedSteps) {
   if (!sortedSteps) {
-    sortedSteps = state.steps.slice().sort(function (a, b) { return a.intensity - b.intensity; });
+    sortedSteps = state.lastSortedSteps && state.lastSortedSteps.length
+      ? state.lastSortedSteps.slice()
+      : state.steps.slice().sort(function (a, b) { return a.intensity - b.intensity; });
   }
   let result = { lt1: null, lt2: null };
   try {
@@ -943,20 +1266,31 @@ function computeAndDisplay(sortedSteps) {
       }
     }
   } catch (e) { /* leave nulls */ }
-  updateLtCards(result);
+  updateLtCards(result, 'comparison');
   try {
-    renderChart(sortedSteps, result);
+    renderChart(sortedSteps, result, {
+      canvasId: 'comparison-chart',
+      chartStateKey: 'comparisonChart'
+    });
   } catch (e) {
     console.error('LT Analyzer: renderChart failed:', e);
   }
-  updateMethodInfo();
-  updateTrainingZones(sortedSteps);
+  updateComparisonMethodInfo();
   updateMethodComparison(sortedSteps);
-  updateDataQuality(sortedSteps);
   updateFitQuality(sortedSteps);
 }
 
-function updateMethodInfo() {
+function updatePrimaryMethodInfo() {
+  const nameEl = document.getElementById('primary-info-name');
+  const descEl = document.getElementById('primary-info-desc');
+  const refEl  = document.getElementById('primary-info-ref');
+
+  nameEl.textContent = PRIMARY_METHOD.label;
+  descEl.textContent = PRIMARY_METHOD.desc;
+  refEl.textContent = 'Viite: ' + PRIMARY_METHOD.ref;
+}
+
+function updateComparisonMethodInfo() {
   const nameEl = document.getElementById('info-name');
   const descEl = document.getElementById('info-desc');
   const refEl  = document.getElementById('info-ref');
@@ -994,7 +1328,13 @@ function updateMethodInfo() {
   }
 }
 
-function updateLtCards(result) {
+function updateLtCards(result, prefix) {
+  const idPrefix = prefix ? prefix + '-' : '';
+  if (prefix) {
+    updateCard(idPrefix + 'lt1', result ? result.lt1 : null, 'Metodi ei laske LT1:ta');
+    updateCard(idPrefix + 'lt2', result ? result.lt2 : null, 'Metodi ei laske LT2:ta');
+    return;
+  }
   updateCard('lt1', result ? result.lt1 : null, 'Metodi ei laske LT1:tä');
   updateCard('lt2', result ? result.lt2 : null, 'Metodi ei laske LT2:ta');
 }
@@ -1093,10 +1433,10 @@ function updateDataQuality(sortedSteps) {
   // Step count
   if (n >= 8) {
     items.push({ icon: 'ok', text: 'Portaita: ' + n + ' \u2014 hyv\u00e4 m\u00e4\u00e4r\u00e4 luotettavaan analyysiin.' });
-  } else if (n >= 5) {
+  } else if (n >= 6) {
     items.push({ icon: 'warn', text: 'Portaita: ' + n + ' \u2014 riitt\u00e4v\u00e4, mutta 8+ portaasta luotettavuus paranee.' });
   } else {
-    items.push({ icon: 'err', text: 'Portaita: ' + n + ' \u2014 v\u00e4h\u00e4inen m\u00e4\u00e4r\u00e4. Polynomimenetelm\u00e4t (LTP, D2max) vaativat v\u00e4hint\u00e4\u00e4n 5 porrasta.' });
+    items.push({ icon: 'err', text: 'Portaita: ' + n + ' \u2014 v\u00e4h\u00e4inen m\u00e4\u00e4r\u00e4. Uusi oletusanalyysi vaatii v\u00e4hint\u00e4\u00e4n 6 porrasta.' });
   }
 
   // Lactate range
@@ -1122,9 +1462,9 @@ function updateDataQuality(sortedSteps) {
     items.push({ icon: 'warn', text: nonMono + ' porras, jossa laktaatti laskee edellisest\u00e4. Tarkista mittausdatan oikeellisuus.' });
   }
 
-  // Above 4.0 check (needed for OBLA)
+  // Check whether the test reached a clearly elevated lactate range.
   if (lacMax < 4.0) {
-    items.push({ icon: 'warn', text: 'Laktaatti ei yll\u00e4 4.0 mmol/L:iin \u2014 OBLA 4.0 -menetelm\u00e4 ei voi laskea LT2:ta.' });
+    items.push({ icon: 'warn', text: 'Laktaatti ei ylla 4.0 mmol/L tasolle. LT2-arvio voi jaada varovaiseksi, jos testi ei noussut riittavan kovalle.' });
   }
 
   items.forEach(function (item) {
@@ -1252,27 +1592,22 @@ function updateMethodComparison(sortedSteps) {
 
 // ── Training zones ──────────────────────────────────────
 
-function updateTrainingZones(sortedSteps) {
+function updateTrainingZones(result) {
   var section = document.getElementById('zones-section');
   var wrap = document.getElementById('zones-table-wrap');
 
-  // Compute consensus from all methods
-  var allResults = runAllMethods(sortedSteps);
-  var consensus = computeConsensus(allResults);
-
-  if (!consensus.lt1 && !consensus.lt2) {
+  if (!result || (!result.lt1 && !result.lt2)) {
     section.style.display = 'none';
     return;
   }
 
   var zones = [];
 
-  if (consensus.lt1 && consensus.lt2) {
-    // 5-zone model from consensus medians
-    var lt1I = consensus.lt1.median;
-    var lt2I = consensus.lt2.median;
-    var lt1HR = Math.round(consensus.lt1.hrMedian);
-    var lt2HR = Math.round(consensus.lt2.hrMedian);
+  if (result.lt1 && result.lt2) {
+    var lt1I = result.lt1.intensity;
+    var lt2I = result.lt2.intensity;
+    var lt1HR = Math.round(result.lt1.hr);
+    var lt2HR = Math.round(result.lt2.hr);
     zones = [
       { name: 'Vy\u00f6hyke 1 \u2014 Palautuminen', color: '#86efac', low: null, high: lt1I * 0.85, hrLow: null, hrHigh: Math.round(lt1HR * 0.85) },
       { name: 'Vy\u00f6hyke 2 \u2014 Peruskest\u00e4vyys', color: '#93c5fd', low: lt1I * 0.85, high: lt1I, hrLow: Math.round(lt1HR * 0.85), hrHigh: lt1HR },
@@ -1280,19 +1615,17 @@ function updateTrainingZones(sortedSteps) {
       { name: 'Vy\u00f6hyke 4 \u2014 Kynnys', color: '#fdba74', low: lt2I, high: lt2I * 1.05, hrLow: lt2HR, hrHigh: Math.round(lt2HR * 1.05) },
       { name: 'Vy\u00f6hyke 5 \u2014 VO\u2082max', color: '#fca5a5', low: lt2I * 1.05, high: null, hrLow: Math.round(lt2HR * 1.05), hrHigh: null }
     ];
-  } else if (consensus.lt2) {
-    // 3-zone model (LT2 only)
-    var lt2I2 = consensus.lt2.median;
-    var lt2HR2 = Math.round(consensus.lt2.hrMedian);
+  } else if (result.lt2) {
+    var lt2I2 = result.lt2.intensity;
+    var lt2HR2 = Math.round(result.lt2.hr);
     zones = [
       { name: 'Alle LT2', color: '#93c5fd', low: null, high: lt2I2, hrLow: null, hrHigh: lt2HR2 },
       { name: 'LT2-alue', color: '#fdba74', low: lt2I2, high: lt2I2 * 1.05, hrLow: lt2HR2, hrHigh: Math.round(lt2HR2 * 1.05) },
       { name: 'Yli LT2', color: '#fca5a5', low: lt2I2 * 1.05, high: null, hrLow: Math.round(lt2HR2 * 1.05), hrHigh: null }
     ];
   } else {
-    // 3-zone model (LT1 only)
-    var lt1I2 = consensus.lt1.median;
-    var lt1HR2 = Math.round(consensus.lt1.hrMedian);
+    var lt1I2 = result.lt1.intensity;
+    var lt1HR2 = Math.round(result.lt1.hr);
     zones = [
       { name: 'Alle LT1', color: '#86efac', low: null, high: lt1I2, hrLow: null, hrHigh: lt1HR2 },
       { name: 'LT1-alue', color: '#93c5fd', low: lt1I2, high: lt1I2 * 1.15, hrLow: lt1HR2, hrHigh: Math.round(lt1HR2 * 1.15) },
@@ -1324,10 +1657,14 @@ function updateTrainingZones(sortedSteps) {
 
 // ── Chart ────────────────────────────────────────────────
 
-function renderChart(steps, result) {
-  if (state.chart) {
-    state.chart.destroy();
-    state.chart = null;
+function renderChart(steps, result, opts) {
+  opts = opts || {};
+  var canvasId = opts.canvasId || 'lt-chart';
+  var chartStateKey = opts.chartStateKey || 'chart';
+
+  if (state[chartStateKey]) {
+    state[chartStateKey].destroy();
+    state[chartStateKey] = null;
   }
 
   const xs = steps.map(function (s) { return s.intensity; });
@@ -1436,9 +1773,11 @@ function renderChart(steps, result) {
   }
 
   const isRunning = state.sport === 'running';
-  const ctx = document.getElementById('lt-chart').getContext('2d');
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
 
-  state.chart = new Chart(ctx, {
+  state[chartStateKey] = new Chart(ctx, {
     type: 'scatter',
     data: { datasets: datasets },
     options: {
